@@ -39,11 +39,7 @@ VERBOSE = False
 NUM_LVL = 2
 LVL_START = 1
 
-filename = input("Input filename (Default is acisi_merged.fits):")
-if not filename:
-    filename = EVT_FILE
-
-hdu = fits.open(filename)
+hdu = fits.open(EVT_FILE)
 evt_data = hdu[1].data
 
 cols = ['energy', 'x', 'y', 'ccd_id']
@@ -70,7 +66,7 @@ plt.savefig("output/0_input_data.png")
 
 def plot_split(sources, figname):
     nb_source = len(sources)
-    fig, axes = plt.subplots(2, nb_source + 1, figsize=(3 * (nb_source + 1), 6))
+    fig, axes = plt.subplots(2, nb_source, figsize=(3 * nb_source, 6))
 
     for i in range(nb_source):
         # --- ROW 1: SPATIAL (TOP) ---
@@ -100,7 +96,7 @@ def plot_split(sources, figname):
         ax_bottom.set_xlabel('keV')
         ax_bottom.set_ylabel('Weighted Counts')
     plt.tight_layout()
-    plt.savefig(figname)
+    plt.savefig(f"output/{figname}")
 
 def starlet_cube(subset, lvl_start=LVL_START, num_lvl=NUM_LVL, include_raw=True):
     """
@@ -132,6 +128,10 @@ def starlet_cube(subset, lvl_start=LVL_START, num_lvl=NUM_LVL, include_raw=True)
     spectral_cube, edges = np.histogramdd(subset[['energy', 'x', 'y']].values, bins=(BINE, BINX, BINY))
     starlet_cube = pys.Starlet_Forward3D(spectral_cube,J=4)[:,:,:,lvl_start:lvl_start+num_lvl]
 
+    if include_raw:
+        raw_energy_level = spectral_cube[..., np.newaxis]
+        combined_cube = torch.from_numpy(np.concatenate([raw_energy_level, starlet_cube], axis=-1)).permute(0, 3, 1, 2)
+
     dims = ['energy', 'x', 'y']
     indices = []
     for i, col in enumerate(dims):
@@ -144,20 +144,19 @@ def starlet_cube(subset, lvl_start=LVL_START, num_lvl=NUM_LVL, include_raw=True)
 
     e_lvls = []
 
-    if include_raw: 
-        e_lvls.append(['energy'])
-        raw_energy_level = spectral_cube[..., np.newaxis]
-        starlet_cube = torch.from_numpy(np.concatenate([raw_energy_level, starlet_cube], axis=-1)).permute(0, 3, 1, 2)
+    if include_raw: e_lvls.append(['energy'])
 
     for lvl in range(num_lvl):
         subset[f'starlet_{lvl}'] = starlet_cube[e_idx, x_idx, y_idx, lvl]
         e_lvls.append(f'starlet_{lvl}')
     
+    if include_raw: starlet_cube = combined_cube
+    
     return starlet_cube, e_lvls
 
-def gmm_fitting(ncomp, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
+def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
     std_scaler = StandardScaler()
-    scaled_df = std_scaler.fit_transform(subset[['x', 'y', *e_lvls]])
+    scaled_df = std_scaler.fit_transform(table[['x', 'y', *e_lvls]])
 
     gmm = GaussianMixture(
         n_components=ncomp,
@@ -188,16 +187,20 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
     return table_bg, table_sources
 
 def source_fit(table_sources, nb_source=3):
-    probs, labels = gmm_fitting(nb_source)
+    probs, labels = gmm_fitting(nb_source, table=table_sources, e_lvls=["energy"])
     sources = []
     for i in range(nb_source):
         sources.append(table_sources[labels == i][['energy', 'x', 'y']].copy())
         sources[-1]['weight'] = probs[labels == i, i]
+    return sources
 
-    plot_split(sources, f"2_sources={nb_source}_split.png")
 
+cube, e_lvls = starlet_cube(subset)
+table_bg, table_sources = bg_fit()
+nb_source = 3
+split_sources = source_fit(table_sources, nb_source)
+plot_split([*split_sources, table_bg], f"2_split_{nb_source}sources.png")
 
-        
     
 
 
