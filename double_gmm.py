@@ -17,8 +17,6 @@ from scipy.ndimage import gaussian_filter1d
 import torch
 
 # TODO: test known spectra as background to subtract before fitting
-# TODO: save files as fits events files -- make image with WCS (steal from original EVT_FILE)
-# copy header info from the original EVT_FILE
 # TODO: with evt files, make a spectrum
 # TODO: use extended ARF/RMF (not point source) -- experiment with background
 # TODO: sherpa package? (for low res spec, which is what we have)
@@ -42,7 +40,7 @@ VMAX = 1e3
 
 BINX = 64
 BINY = 64
-BINE = 50
+BINE = 100
 
 VERBOSE = False
 
@@ -53,7 +51,7 @@ hdu = fits.open(EVT_FILE)
 evt_data = hdu[1].data
 
 cols = ['energy', 'x', 'y', 'ccd_id']
-df = Table([evt_data[c] for c in cols], names=cols).to_pandas()
+df = Table([evt_data[c] for c in cols], names=cols, dtype=[np.float64, np.float64, np.float64, np.float64]).to_pandas()
 
 subset = df[(df['x'] > XMIN) & (df['x'] < XMAX) & \
             (df['y'] > YMIN) & (df['y'] < YMAX) & \
@@ -269,19 +267,42 @@ def source_fit(table_sources, nb_source=3):
     probs, labels = gmm_fitting(nb_source, table=table_sources, e_lvls=["energy"])
     sources = []
     for i in range(nb_source):
-        sources.append(table_sources[labels == i][['energy', 'x', 'y']].copy())
-        sources[-1]['weight'] = probs[labels == i, i] * table_sources[labels == i]['weight']
+        source_table = table_sources[labels == i][['energy', 'x', 'y']].copy()
+        source_table['weight'] = probs[labels == i, i] * table_sources[labels == i]['weight']
+        sources.append(source_table)
     return sources
 
 
 def save_df_as_fits(source_df, filename):
-    astropy_table = Table.from_pandas(source_df)
-    new_hdu = fits.BinTableHDU(data=astropy_table)
-    new_hdu.header.update(hdu[1].header.copy())
-    primary_hdu = fits.PrimaryHDU()
-    hdul_to_save = fits.HDUList([primary_hdu, new_hdu])
-    hdul_to_save.writeto(f'output/{filename}', overwrite=True)
+    from astropy.io import fits
+from astropy.table import Table
+
+def save_df_as_fits(source_df, filename):
+    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])
+    hdr0 = fits.getheader(EVT_FILE, 0)
+    hdr1 = fits.getheader(EVT_FILE, 1).copy()
+    new_hdr1 = fits.Header()
     
+    for key, value in hdr1.items():
+        if any(x in key for x in ['TELESCOP', 'INSTRUME', 'OBS_ID', 'DATE', 'EXPOSURE']):
+            new_hdr1[key] = value
+            
+        # REMAP WCS: if it was for Col 11 (x), make it Col 2
+        elif '11' in key:
+            new_key = key.replace('11', '2')
+            new_hdr1[new_key] = value
+            
+        # REMAP WCS: if it was for Col 12 (y), make it Col 3
+        elif '12' in key:
+            new_key = key.replace('12', '3')
+            new_hdr1[new_key] = value
+
+    primary_hdu = fits.PrimaryHDU(header=hdr0)
+    evt_hdu = fits.BinTableHDU(data=astropy_table, header=new_hdr1)
+    evt_hdu.name = "EVENTS"
+    hdul = fits.HDUList([primary_hdu, evt_hdu])
+    hdul.writeto(f'output/{filename}', overwrite=True)
+    print(f"Success! Saved to output/{filename}")
 
 cube, e_lvls = starlet_cube(subset)
 table_bg, table_sources = bg_fit()
