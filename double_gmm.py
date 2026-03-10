@@ -16,6 +16,16 @@ from scipy.ndimage import gaussian_filter1d
 
 import torch
 
+# TODO: test known spectra as background to subtract before fitting
+# TODO: save files as fits events files -- make image with WCS (steal from original EVT_FILE)
+# copy header info from the original EVT_FILE
+# TODO: with evt files, make a spectrum
+# TODO: use extended ARF/RMF (not point source) -- experiment with background
+# TODO: sherpa package? (for low res spec, which is what we have)
+# TODO: characterize background! what's going on with the plasma, radial profile from counts histogram (take xy position -> WCS, calc center of Sag A* and compute the radius then brightness/spectra going out in radius)
+    # compare radial profile for background + separated black hole
+# then you could load into xspec!
+
 # DECLARE CONSTANTS
 
 EVT_FILE = 'acisi_merged.fits'
@@ -25,7 +35,7 @@ YMIN = 4080
 YMAX = 4120
 
 EMIN = 2000
-EMAX = 6000
+EMAX = 8000
 
 VMIN = 0.5
 VMAX = 1e3
@@ -264,13 +274,21 @@ def source_fit(table_sources, nb_source=3):
     return sources
 
 
+def save_df_as_fits(source_df, filename):
+    astropy_table = Table.from_pandas(source_df)
+    new_hdu = fits.BinTableHDU(data=astropy_table)
+    new_hdu.header.update(hdu[1].header.copy())
+    primary_hdu = fits.PrimaryHDU()
+    hdul_to_save = fits.HDUList([primary_hdu, new_hdu])
+    hdul_to_save.writeto(f'output/{filename}', overwrite=True)
+    
+
 cube, e_lvls = starlet_cube(subset)
 table_bg, table_sources = bg_fit()
-nb_source = 3
+nb_source = 4
 split_sources = source_fit(table_sources, nb_source)
 plot_split([*split_sources, table_bg], f"2_split_{nb_source}sources.png")
 
-    
-
-
-    
+# Save all as fits events files
+for i, source in enumerate([*split_sources, table_bg]):
+    save_df_as_fits(source, f'source_{i}.fits')
