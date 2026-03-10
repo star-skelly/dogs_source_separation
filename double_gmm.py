@@ -32,7 +32,7 @@ VMAX = 1e3
 
 BINX = 64
 BINY = 64
-BINE = 100
+BINE = 50
 
 VERBOSE = False
 
@@ -65,6 +65,15 @@ plt.tight_layout()
 plt.savefig("output/0_input_data.png")
 
 def plot_split(sources, figname):
+    """Plotting helper function. Plots spatial and spectral sources
+
+    Parameters
+    ---------- 
+    sources : list[df]
+        input list of pandas dataframes to plot
+    figname : string
+        filename to save under, will be saved in output/ folder
+    """
     nb_source = len(sources)
     fig, axes = plt.subplots(2, nb_source, figsize=(3 * nb_source, 6))
 
@@ -155,6 +164,24 @@ def starlet_cube(subset, lvl_start=LVL_START, num_lvl=NUM_LVL, include_raw=True)
     return starlet_cube, e_lvls
 
 def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
+    """Fits a GMM to a table, given the number of components and the energy levels to include.
+    
+    Parameters
+    ---------- 
+    ncomp : int
+        number of components to fit the GMM to
+    table: df
+        data to fit to
+    e_lvls: list
+        levels to consider (column names of df to include)
+
+    Returns
+    ---------- 
+    probs : array
+        the probability that a specific pixel is part of that cluster
+    lables : array
+        the most likely cluster for a specific pixel
+    """
     std_scaler = StandardScaler()
     scaled_df = std_scaler.fit_transform(table[['x', 'y', *e_lvls]])
 
@@ -171,6 +198,27 @@ def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1
     return probs, labels
 
 def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
+    """Specific function for splitting the image into background and sources.
+        Operates by splitting mostly along the starlet levels, which is activated
+        in regions where there seems to be a star-like shape.
+
+    Parameters
+    ---------- 
+    ncomp : int
+        defaults to 2 (background, sources)
+    e_lvls: list
+        levels to consider (column names of df to include)
+
+    Returns
+    ---------- 
+    table_bg : df
+        the data that is part of the background, with a 'weight' column 
+        for probability of each pixel belonging to background.
+    table_sourcs : df
+        data that belongs to a source, with a 'weight' column for 
+        probability of each pixel belonging to a source rather than background.
+          
+    """
     probs, labels = gmm_fitting(ncomp)
     
     table_bg = subset[labels == 0][[*e_lvls, 'x', 'y']].copy()
@@ -179,19 +227,40 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
     table_bg['weight'] = probs[labels == 0, 0]
     table_sources['weight'] = probs[labels == 1, 1]
 
-    print("Check these are not too different")
-    print(f"Sky background table size: {len(table_bg)}")
-    print(f"Sky source table size: {len(table_sources)}")
-
+    print("Background table should be larger than sources table.")
     plot_split([table_bg, table_sources], "1_bg_sources_split.png")
+    
+    # TODO: better way of determining bg/sources that doesn't rely on size
+    # ... image variation loss? but then we have to convert to images first...
+    
+    if len(table_bg) < len(table_sources):
+        return table_sources, table_bg
+    
     return table_bg, table_sources
 
 def source_fit(table_sources, nb_source=3):
+    """Specific function for splitting the sources df into each source.
+        Operates in energy level only. Defaults to 3 sources for our use case
+
+    Parameters
+    ---------- 
+    table_sources : df
+        table containing the source data (already split from background)
+        should have 'weight' column with probabilities
+    nb_source: int
+        number of objects to split into
+
+    Returns
+    ---------- 
+    sources : list
+        the list of dataframes for each source, each with their own 'weight' column
+        corresponding to [belongs to source i] weight * [belongs to a source] weight
+    """
     probs, labels = gmm_fitting(nb_source, table=table_sources, e_lvls=["energy"])
     sources = []
     for i in range(nb_source):
         sources.append(table_sources[labels == i][['energy', 'x', 'y']].copy())
-        sources[-1]['weight'] = probs[labels == i, i]
+        sources[-1]['weight'] = probs[labels == i, i] * table_sources[labels == i]['weight']
     return sources
 
 
