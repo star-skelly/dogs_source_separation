@@ -6,7 +6,7 @@ from astropy.table import Table
 
 import pandas as pd
 import pyStarlet_master_2D1D as pys
-
+import subprocess
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.mixture import GaussianMixture
@@ -42,7 +42,7 @@ BINX = 64
 BINY = 64
 BINE = 100
 
-VERBOSE = False
+VERBOSE = True
 
 NUM_LVL = 2
 LVL_START = 1
@@ -187,8 +187,12 @@ def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1
     ---------- 
     probs : array
         the probability that a specific pixel is part of that cluster
-    lables : array
+    labels : array
         the most likely cluster for a specific pixel
+    centers : list
+        x, y pairs for the center of each component
+    std_devs : list
+        x, y pairs for the spread of each component
     """
     std_scaler = StandardScaler()
     scaled_df = std_scaler.fit_transform(table[['x', 'y', *e_lvls]])
@@ -203,7 +207,28 @@ def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1
     probs = gmm.predict_proba(scaled_df)
     labels = gmm.predict(scaled_df) 
 
-    return probs, labels
+    centers_scaled = gmm.means_
+    centers_original = std_scaler.inverse_transform(centers_scaled) # since we used standard scaler, have to transform back
+    covariances = gmm.covariances_
+    std_devs = [] # should be a list of [std_x, std_y, theta]
+    
+    if VERBOSE:
+        for i, center in enumerate(centers_original):
+            print(f"Cluster {i} Center: x={center[0]:.2f}, y={center[1]:.2f}")
+
+    for i in range(ncomp):
+        v, w = np.linalg.eigh(covariances[i][:2, :2])
+        u = w[0] / np.linalg.norm(w[0])
+        angle = np.arctan2(u[1], u[0])
+        angle = 180 * angle / np.pi  # convert to degrees
+        v = 2.0 * np.sqrt(2.0) * np.sqrt(v)
+
+        std_devs.append([v[0], v[1], 180 + angle])
+    
+        if VERBOSE: 
+            print(f"Cluster {i} Spread (Scaled Units): x_std={std_devs[i][0]:.2f}, y_std={std_devs[i][1]:.2f}, theta={std_devs[i][2]:.2f}")
+
+    return probs, labels, centers_original, std_devs
 
 def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
     """Specific function for splitting the image into background and sources.
@@ -227,7 +252,7 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
         probability of each pixel belonging to a source rather than background.
           
     """
-    probs, labels = gmm_fitting(ncomp)
+    probs, labels, centers, cov = gmm_fitting(ncomp)
     
     table_bg = subset[labels == 0][[*e_lvls, 'x', 'y']].copy()
     table_sources = subset[labels == 1][[*e_lvls, 'x', 'y']].copy()
@@ -264,52 +289,61 @@ def source_fit(table_sources, nb_source=3):
         the list of dataframes for each source, each with their own 'weight' column
         corresponding to [belongs to source i] weight * [belongs to a source] weight
     """
-    probs, labels = gmm_fitting(nb_source, table=table_sources, e_lvls=["energy"])
+    probs, labels, centers, std_devs = gmm_fitting(nb_source, table=table_sources, e_lvls=["energy"])
     sources = []
     for i in range(nb_source):
         source_table = table_sources[labels == i][['energy', 'x', 'y']].copy()
         source_table['weight'] = probs[labels == i, i] * table_sources[labels == i]['weight']
         sources.append(source_table)
-    return sources
-
-
-def save_df_as_fits(source_df, filename):
-    from astropy.io import fits
-from astropy.table import Table
+    return sources, centers, std_devs
 
 def save_df_as_fits(source_df, filename):
-    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])
-    hdr0 = fits.getheader(EVT_FILE, 0)
-    hdr1 = fits.getheader(EVT_FILE, 1).copy()
-    new_hdr1 = fits.Header()
+    astropy_table = Table.from_pandas(source_df)
+    new_hdu = fits.BinTableHDU(data=astropy_table)
+    new_hdu.header.update(hdu[1].header.copy())
+    primary_hdu = fits.PrimaryHDU()
+    hdul = fits.HDUList([primary_hdu, new_hdu])
+    hdul.writeto(f'output/{filename}', overwrite=True)
+
+def save_df_for_ciao(source_df, filename, template_evt_file):
+    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y']])
     
-    for key, value in hdr1.items():
-        if any(x in key for x in ['TELESCOP', 'INSTRUME', 'OBS_ID', 'DATE', 'EXPOSURE']):
-            new_hdr1[key] = value
-            
-        # REMAP WCS: if it was for Col 11 (x), make it Col 2
-        elif '11' in key:
-            new_key = key.replace('11', '2')
-            new_hdr1[new_key] = value
-            
-        # REMAP WCS: if it was for Col 12 (y), make it Col 3
-        elif '12' in key:
-            new_key = key.replace('12', '3')
-            new_hdr1[new_key] = value
+    with fits.open(template_evt_file) as hdul_template:
+        hdr0 = hdul_template[0].header.copy()
+        hdr1 = hdul_template[1].header.copy()
+        gti_hdu = hdul_template['GTI'].copy()
+
+    new_hdr1 = hdr1.copy()
+
+    with open('temp.txt', 'a') as f:
+        f.write('##########################')
+        for key in list(new_hdr1.keys()):
+            if key != "HISTORY" and key != "COMMENT":
+                f.write(key + ": " + str(new_hdr1[key]) + '\n')
+    
+    hdr1_del = ['ASOLFILE', 'COMMENT', 'HISTORY', 'CREATOR', 'DS_IDENT', 'TITLE', 'OBSERVER', 'OBJECT', 'OBS_ID', 'SEQ_NUM', 'MASKFILE']
+    
+    for k in hdr1_del:
+        del new_hdr1[k]
+    
+    del hdr0['DS_IDENT']
+    del hdr0['OBS_ID']
+    del hdr0['SEQ_NUM']
+    del hdr0['CREATOR']
 
     primary_hdu = fits.PrimaryHDU(header=hdr0)
-    evt_hdu = fits.BinTableHDU(data=astropy_table, header=new_hdr1)
-    evt_hdu.name = "EVENTS"
-    hdul = fits.HDUList([primary_hdu, evt_hdu])
-    hdul.writeto(f'output/{filename}', overwrite=True)
-    print(f"Success! Saved to output/{filename}")
+    evt_hdu = fits.BinTableHDU(data=astropy_table, header=new_hdr1, name="EVENTS")
+    hdul = fits.HDUList([primary_hdu, evt_hdu, gti_hdu])
+    
+    final_out = f"output/{filename}"
+    hdul.writeto(final_out, overwrite=True)
 
 cube, e_lvls = starlet_cube(subset)
 table_bg, table_sources = bg_fit()
 nb_source = 4
-split_sources = source_fit(table_sources, nb_source)
+split_sources, centers, std_dev = source_fit(table_sources, nb_source)
 plot_split([*split_sources, table_bg], f"2_split_{nb_source}sources.png")
 
 # Save all as fits events files
 for i, source in enumerate([*split_sources, table_bg]):
-    save_df_as_fits(source, f'source_{i}.fits')
+    save_df_for_ciao(source, f"source_{i}.fits", EVT_FILE)
