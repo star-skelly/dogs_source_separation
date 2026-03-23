@@ -300,35 +300,6 @@ def source_fit(table_sources, nb_source=3):
         sources.append(source_table)
     return sources, centers, std_devs
 
-def save_df_as_fits(source_df, filename, template_evt_file):
-    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])
-    hdr0 = fits.getheader(template_evt_file, 0)
-    hdr1 = fits.getheader(template_evt_file, 1).copy()
-    
-    new_hdr1 = hdr1.copy()
-    for key in list(new_hdr1.keys()):
-        if any(key.startswith(p) and key[len(p):].isdigit() for p in ['TTYPE', 'TFORM', 'TUNIT', 'TDISP', 'TDIM', 'TNULL', 'TLMIN', 'TLMAX', 'TCRVL', 'TCRPX', 'TCDLT', 'TCTYP', 'TCUNI']):
-            del new_hdr1[key]
-    
-    mapping = {
-        '2': '11', # Map new X (2) to old X (11)
-        '3': '12'  # Map new Y (3) to old Y (12)
-    }
-    
-    wcs_prefixes = ['TCRVL', 'TCRPX', 'TCDLT', 'TCTYP', 'TCUNI', 'TLMIN', 'TLMAX']
-    
-    for new_col, old_col in mapping.items():
-        for pre in wcs_prefixes:
-            old_key = f"{pre}{old_col}"
-            if old_key in hdr1:
-                new_hdr1[f"{pre}{new_col}"] = hdr1[old_key]
-    
-    primary_hdu = fits.PrimaryHDU(header=hdr0)
-    evt_hdu = fits.BinTableHDU(data=astropy_table, header=new_hdr1)
-    evt_hdu.name = "EVENTS"
-    hdul = fits.HDUList([primary_hdu, evt_hdu])
-    hdul.writeto(f'output/{filename}', overwrite=True)
-
 def final_wcs_injection(target_fits, wcs_obj):
     """
     Manually 'wires' the WCS object into the target FITS table 
@@ -374,12 +345,81 @@ def final_wcs_injection(target_fits, wcs_obj):
         hdul.flush()
     print("WCS successfully wired to Columns 2 and 3.")
 
+def save_df_as_fits(source_df, filename, template_evt_file):
+    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])
+    hdr0 = fits.getheader(template_evt_file, 0)
+    hdr1 = fits.getheader(template_evt_file, 1).copy()
+    
+    new_hdr1 = hdr1.copy()
+    for key in list(new_hdr1.keys()):
+        if any(key.startswith(p) and key[len(p):].isdigit() for p in ['TTYPE', 'TFORM', 'TUNIT', 'TDISP', 'TDIM', 'TNULL', 'TLMIN', 'TLMAX', 'TCRVL', 'TCRPX', 'TCDLT', 'TCTYP', 'TCUNI']):
+            del new_hdr1[key]
+    
+    mapping = {
+        '2': '11', # Map new X (2) to old X (11)
+        '3': '12'  # Map new Y (3) to old Y (12)
+    }
+    
+    wcs_prefixes = ['TCRVL', 'TCRPX', 'TCDLT', 'TCTYP', 'TCUNI', 'TLMIN', 'TLMAX']
+    
+    for new_col, old_col in mapping.items():
+        for pre in wcs_prefixes:
+            old_key = f"{pre}{old_col}"
+            if old_key in hdr1:
+                new_hdr1[f"{pre}{new_col}"] = hdr1[old_key]
+
+    primary_hdu = fits.PrimaryHDU(header=hdr0)
+    evt_hdu = fits.BinTableHDU(data=astropy_table, header=new_hdr1)
+    evt_hdu.name = "EVENTS"
+    hdul = fits.HDUList([primary_hdu, evt_hdu])
+    hdul.writeto(f'output/{filename}', overwrite=True)
+
+def save_for_specextract(source_df, out_filename, template_evt):
+    # 1. Prep your data
+    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])
+    
+    with fits.open(template_evt) as hdul_template:
+        hdr0 = hdul_template[0].header.copy()
+        hdr1 = hdul_template[1].header.copy()
+        
+        gti_hdus = []
+        for hdu in hdul_template:
+            if "GTI" in hdu.name.upper():
+                gti_hdus.append(hdu.copy())
+        
+        if not gti_hdus:
+            print("WARNING: No GTI blocks found in the template file!")
+
+    new_hdr1 = hdr1.copy()
+    if 'HISTORY' in new_hdr1: del new_hdr1['HISTORY']
+    
+    for key in list(new_hdr1.keys()):
+        if any(key.startswith(p) and key[len(p):].isdigit() for p in ['TTYPE', 'TFORM', 'TUNIT', 'TCRVL', 'TCRPX', 'TCDLT']):
+            del new_hdr1[key]
+    mapping = {'2': '11', '3': '12'}
+    for new_col, old_col in mapping.items():
+        for pre in ['TCRVL', 'TCRPX', 'TCDLT', 'TCTYP', 'TCUNI', 'TLMIN', 'TLMAX']:
+            if f"{pre}{old_col}" in hdr1:
+                new_hdr1[f"{pre}{new_col}"] = hdr1[f"{pre}{old_col}"]
+
+    primary_hdu = fits.PrimaryHDU(header=hdr0)
+    evt_hdu = fits.BinTableHDU(data=astropy_table, header=new_hdr1)
+    evt_hdu.name = "EVENTS"
+    
+    # 5. Build the list: Primary + EVENTS + all the GTI blocks
+    hdul = fits.HDUList([primary_hdu, evt_hdu] + gti_hdus)
+    
+    hdul.writeto(f'output/{out_filename}', overwrite=True)
+    print(f"Success! Blocks in file: {[h.name for h in hdul]}")
+
 cube, e_lvls = starlet_cube(subset)
 table_bg, table_sources = bg_fit(e_lvls = ['energy', 'starlet_0'])
 split_sources, centers, std_dev = source_fit(table_sources, NB_SOURCE)
 bg_split_sources, cntrs, stddv = source_fit(table_bg, NB_SOURCE)
 plot_split([*split_sources, table_bg], f"2_split_{NB_SOURCE}sources.png")
 plot_split(bg_split_sources, f"2_split_{NB_SOURCE}bg.png")
+
+# Save all as fits events files
 
 with fits.open(EVT_FILE) as hdul:
     solved_wcs = pywcs.WCS(hdul[1].header)
