@@ -26,11 +26,11 @@ import torch
 
 # DECLARE CONSTANTS
 
-EVT_FILE = 'acisi_merged.fits'
-XMIN = 4085
-XMAX = 4120
-YMIN = 4080
-YMAX = 4120
+EVT_FILE = '3392/repro/acisf03392_repro_evt2.fits' #'acisi_merged.fits'
+XMIN = 4110 #4085
+XMAX = 4150 #4120
+YMIN = 4050 #4080
+YMAX = 4110 #4120
 
 EMIN = 2000
 EMAX = 8000
@@ -40,12 +40,15 @@ VMAX = 1e3
 
 BINX = 64
 BINY = 64
-BINE = 100
+BINE = 60
 
 VERBOSE = True
 
+# num_lvl + num_start = 5
 NUM_LVL = 2
-LVL_START = 1
+LVL_START = 2
+
+NB_SOURCE = 4
 
 hdu = fits.open(EVT_FILE)
 evt_data = hdu[1].data
@@ -252,7 +255,7 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
         probability of each pixel belonging to a source rather than background.
           
     """
-    probs, labels, centers, cov = gmm_fitting(ncomp)
+    probs, labels, centers, cov = gmm_fitting(ncomp, e_lvls=e_lvls)
     
     table_bg = subset[labels == 0][[*e_lvls, 'x', 'y']].copy()
     table_sources = subset[labels == 1][[*e_lvls, 'x', 'y']].copy()
@@ -297,12 +300,33 @@ def source_fit(table_sources, nb_source=3):
         sources.append(source_table)
     return sources, centers, std_devs
 
-def save_df_as_fits(source_df, filename):
-    astropy_table = Table.from_pandas(source_df)
-    new_hdu = fits.BinTableHDU(data=astropy_table)
-    new_hdu.header.update(hdu[1].header.copy())
-    primary_hdu = fits.PrimaryHDU()
-    hdul = fits.HDUList([primary_hdu, new_hdu])
+def save_df_as_fits(source_df, filename, template_evt_file):
+    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])
+    hdr0 = fits.getheader(template_evt_file, 0)
+    hdr1 = fits.getheader(template_evt_file, 1).copy()
+    
+    new_hdr1 = hdr1.copy()
+    for key in list(new_hdr1.keys()):
+        if any(key.startswith(p) and key[len(p):].isdigit() for p in ['TTYPE', 'TFORM', 'TUNIT', 'TDISP', 'TDIM', 'TNULL', 'TLMIN', 'TLMAX', 'TCRVL', 'TCRPX', 'TCDLT', 'TCTYP', 'TCUNI']):
+            del new_hdr1[key]
+    
+    mapping = {
+        '2': '11', # Map new X (2) to old X (11)
+        '3': '12'  # Map new Y (3) to old Y (12)
+    }
+    
+    wcs_prefixes = ['TCRVL', 'TCRPX', 'TCDLT', 'TCTYP', 'TCUNI', 'TLMIN', 'TLMAX']
+    
+    for new_col, old_col in mapping.items():
+        for pre in wcs_prefixes:
+            old_key = f"{pre}{old_col}"
+            if old_key in hdr1:
+                new_hdr1[f"{pre}{new_col}"] = hdr1[old_key]
+
+    primary_hdu = fits.PrimaryHDU(header=hdr0)
+    evt_hdu = fits.BinTableHDU(data=astropy_table, header=new_hdr1)
+    evt_hdu.name = "EVENTS"
+    hdul = fits.HDUList([primary_hdu, evt_hdu])
     hdul.writeto(f'output/{filename}', overwrite=True)
 
 def save_df_for_ciao(source_df, filename, template_evt_file):
@@ -339,11 +363,12 @@ def save_df_for_ciao(source_df, filename, template_evt_file):
     hdul.writeto(final_out, overwrite=True)
 
 cube, e_lvls = starlet_cube(subset)
-table_bg, table_sources = bg_fit()
-nb_source = 4
-split_sources, centers, std_dev = source_fit(table_sources, nb_source)
-plot_split([*split_sources, table_bg], f"2_split_{nb_source}sources.png")
+table_bg, table_sources = bg_fit(e_lvls = ['energy', 'starlet_0'])
+split_sources, centers, std_dev = source_fit(table_sources, NB_SOURCE)
+bg_split_sources, cntrs, stddv = source_fit(table_bg, NB_SOURCE)
+plot_split([*split_sources, table_bg], f"2_split_{NB_SOURCE}sources.png")
+plot_split(bg_split_sources, f"2_split_{NB_SOURCE}bg.png")
 
 # Save all as fits events files
 for i, source in enumerate([*split_sources, table_bg]):
-    save_df_for_ciao(source, f"source_{i}.fits", EVT_FILE)
+    save_df_as_fits(source, f"source_{i}.fits", EVT_FILE)
