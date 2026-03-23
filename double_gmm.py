@@ -420,10 +420,9 @@ plot_split([*split_sources, table_bg], f"2_split_{NB_SOURCE}sources.png")
 plot_split(bg_split_sources, f"2_split_{NB_SOURCE}bg.png")
 
 # Save all as fits events files
-
 with fits.open(EVT_FILE) as hdul:
     solved_wcs = pywcs.WCS(hdul[1].header)
 
 for i, source in enumerate([*split_sources, table_bg]):
-    save_df_as_fits(source, f"source_{i}.fits", EVT_FILE)
+    save_for_specextract(source, f"source_{i}.fits", EVT_FILE)
     final_wcs_injection(f"output/source_{i}.fits", solved_wcs)
