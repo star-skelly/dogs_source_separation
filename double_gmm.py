@@ -306,7 +306,6 @@ def final_wcs_injection(target_fits, wcs_obj):
     specifically for CIAO specextract compatibility.
     """
     with fits.open(target_fits, mode='update') as hdul:
-        # Access the EVENTS table (usually index 1)
         hdr = hdul['EVENTS'].header
         
         # 1. Map the RA/Dec center (CRVAL)
@@ -376,7 +375,10 @@ def save_df_as_fits(source_df, filename, template_evt_file):
 
 def save_for_specextract(source_df, out_filename, template_evt):
     # 1. Prep your data
-    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])
+    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y']])
+    astropy_table['energy'] = astropy_table['energy'].astype(np.float32)
+    astropy_table['x'] = astropy_table['x'].astype(np.float32)
+    astropy_table['y'] = astropy_table['y'].astype(np.float32)
     
     with fits.open(template_evt) as hdul_template:
         hdr0 = hdul_template[0].header.copy()
@@ -393,9 +395,6 @@ def save_for_specextract(source_df, out_filename, template_evt):
     new_hdr1 = hdr1.copy()
     if 'HISTORY' in new_hdr1: del new_hdr1['HISTORY']
     
-    for key in list(new_hdr1.keys()):
-        if any(key.startswith(p) and key[len(p):].isdigit() for p in ['TTYPE', 'TFORM', 'TUNIT', 'TCRVL', 'TCRPX', 'TCDLT']):
-            del new_hdr1[key]
     mapping = {'2': '11', '3': '12'}
     for new_col, old_col in mapping.items():
         for pre in ['TCRVL', 'TCRPX', 'TCDLT', 'TCTYP', 'TCUNI', 'TLMIN', 'TLMAX']:
@@ -419,9 +418,39 @@ bg_split_sources, cntrs, stddv = source_fit(table_bg, NB_SOURCE)
 plot_split([*split_sources, table_bg], f"2_split_{NB_SOURCE}sources.png")
 plot_split(bg_split_sources, f"2_split_{NB_SOURCE}bg.png")
 
+def save_wcs_update(source_df, out_file, temp_evt):
+    with fits.open(EVT_FILE) as hdul_src:
+        original_header = hdul_src[1].header.copy()
+        hdr0 = hdul_src[0].header.copy()
+
+    astropy_table = Table.from_pandas(source_df)
+    astropy_table['energy'] = astropy_table['energy'].astype(np.float32)
+    astropy_table['x'] = astropy_table['x'].astype(np.float32)
+    astropy_table['y'] = astropy_table['y'].astype(np.float32)
+
+    table_hdu = fits.BinTableHDU(data=astropy_table)
+
+    # 4. Critical: Sync the header
+    for key in original_header:
+        # Skip standard structural keywords that BinTableHDU manages
+        if key not in ['XTENSION', 'BITPIX', 'NAXIS', 'NAXIS1', 'NAXIS2', 'PCOUNT', 'GCOUNT', 'TFIELDS', 'COMMENT', 'HISTORY']:
+            if not key.startswith('TTYPE') and not key.startswith('TFORM'):
+                try:
+                    table_hdu.header[key] = original_header[key]
+                except ValueError:
+                    print(key)
+                    continue
+
+    # 5. Build the HDUList (FITS files need a PrimaryHDU at index 0)
+    phdu = fits.PrimaryHDU(header=hdr0) # You can copy hdul_src[0].header here if needed
+    hdul_out = fits.HDUList([phdu, table_hdu])
+
+    # 6. Save it
+    hdul_out.writeto(f"output/{out_file}", overwrite=True)
+
 # Save all as fits events files
 with fits.open(EVT_FILE) as hdul:
-    solved_wcs = pywcs.WCS(hdul[1].header)
+    solved_wcs = pywcs.WCS(hdul[0].header)
 
 for i, source in enumerate([*split_sources, table_bg]):
     save_for_specextract(source, f"source_{i}.fits", EVT_FILE)
