@@ -53,7 +53,7 @@ NB_SOURCE = 4
 hdu = fits.open(EVT_FILE)
 evt_data = hdu[1].data
 
-cols = ['energy', 'x', 'y', 'ccd_id']
+cols = ['energy', 'x', 'y', 'ccd_id', 'sky(x,y)']
 df = Table([evt_data[c] for c in cols], names=cols, dtype=[np.float64, np.float64, np.float64, np.float64]).to_pandas()
 
 subset = df[(df['x'] > XMIN) & (df['x'] < XMAX) & \
@@ -269,10 +269,16 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
     # TODO: better way of determining bg/sources that doesn't rely on size
     # ... image variation loss? but then we have to convert to images first...
     
-    if len(table_bg) < len(table_sources):
-        return table_sources, table_bg
+    bg_second = len(table_bg) < len(table_sources)
+
+    bg_mask = (labels == 0)
+    if bg_second:
+        bg_mask = not bg_mask
+
+    if bg_second:
+        return table_sources, table_bg, bg_mask
     
-    return table_bg, table_sources
+    return table_bg, table_sources, bg_mask
 
 def source_fit(table_sources, nb_source=3):
     """Specific function for splitting the sources df into each source.
@@ -300,49 +306,28 @@ def source_fit(table_sources, nb_source=3):
         sources.append(source_table)
     return sources, centers, std_devs
 
-def final_wcs_injection(target_fits, wcs_obj):
+def mask_source_fit(table_sources, nb_source=3):
+    """Specific function for splitting the sources df into each source.
+        Operates in energy level only. Defaults to 3 sources for our use case
+
+    Parameters
+    ---------- 
+    table_sources : df
+        table containing the source data (already split from background)
+        should have 'weight' column with probabilities
+    nb_source: int
+        number of objects to split into
+
+    Returns
+    ---------- 
+    masks : list
+        the list of masks for each source, compatible with saving as fits file
     """
-    Manually 'wires' the WCS object into the target FITS table 
-    specifically for CIAO specextract compatibility.
-    """
-    with fits.open(target_fits, mode='update') as hdul:
-        hdr = hdul['EVENTS'].header
-        
-        # 1. Map the RA/Dec center (CRVAL)
-        # wcs_obj.wcs.crval[0] is RA, [1] is Dec
-        hdr['CRVAL2'] = wcs_obj.wcs.crval[0]
-        hdr['CRVAL3'] = wcs_obj.wcs.crval[1]
-        
-        # 2. Map the Pixel Center (CRPIX)
-        # Chandra physical coords are usually centered at 4096.5
-        hdr['CRPIX2'] = wcs_obj.wcs.crpix[0]
-        hdr['CRPIX3'] = wcs_obj.wcs.crpix[1]
-        
-        # 3. Map the Pixel Scale (CDELT)
-        # Standard ACIS is ~0.492 arcsec/pixel => 0.00013666 deg
-        cdelt = wcs_obj.wcs.get_cdelt()
-        hdr['CDELT2'] = cdelt[0]
-        hdr['CDELT3'] = cdelt[1]
-        
-        # 4. Mandatory CIAO "Handshake" Keywords
-        # This tells specextract: 'Columns 2 and 3 are the Sky'
-        hdr['CTYPE2'] = 'x'
-        hdr['CTYPE3'] = 'y'
-        hdr['WCSTY2'] = 'PHYSICAL'
-        hdr['WCSTY3'] = 'PHYSICAL'
-        
-        # This points to the Coordinate System defined in ObsID 3392
-        hdr['ACSYS4'] = 'SKY:ASC-FP-1.1'
-        
-        # 5. The "Security Seal" (Data Subspace)
-        # This is the final step to make dmcoords work
-        hdr['DSTYP1'] = 'time'
-        hdr['DSVAL1'] = 'TABLE'
-        hdr['DSTYP2'] = 'x,y'
-        hdr['DSVAL2'] = 'specnum:1'
-        
-        hdul.flush()
-    print("WCS successfully wired to Columns 2 and 3.")
+    probs, labels, centers, std_devs = gmm_fitting(nb_source, table=table_sources, e_lvls=["energy"])
+    masks = []
+    for i in range(nb_source):
+        masks[i] = (labels == i)
+    return masks
 
 def save_df_as_fits(source_df, filename, template_evt_file):
     astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])
@@ -411,47 +396,32 @@ def save_for_specextract(source_df, out_filename, template_evt):
     hdul.writeto(f'output/{out_filename}', overwrite=True)
     print(f"Success! Blocks in file: {[h.name for h in hdul]}")
 
+def save_with_masks(mask, out, template):
+    with fits.open(template) as hdul:
+        # Get the events table
+        events_hdu = hdul['EVENTS']
+        data = events_hdu.data
+
+        mask = df.index.values 
+        filtered_data = data[mask]
+        new_table_hdu = fits.BinTableHDU(data=filtered_data, header=events_hdu.header)
+        
+        new_hdul = fits.HDUList([hdul[0], new_table_hdu])
+        
+        for i in range(2, len(hdul)):
+            new_hdul.append(hdul[i])
+            
+        new_hdul.writeto(f"output/{out}", overwrite=True)
+
 cube, e_lvls = starlet_cube(subset)
-table_bg, table_sources = bg_fit(e_lvls = ['energy', 'starlet_0'])
+table_bg, table_sources, bg_mask = bg_fit(e_lvls = ['energy', 'starlet_0'])
 split_sources, centers, std_dev = source_fit(table_sources, NB_SOURCE)
-bg_split_sources, cntrs, stddv = source_fit(table_bg, NB_SOURCE)
+src_masks = mask_source_fit(table_sources, NB_SOURCE)
 plot_split([*split_sources, table_bg], f"2_split_{NB_SOURCE}sources.png")
-plot_split(bg_split_sources, f"2_split_{NB_SOURCE}bg.png")
-
-def save_wcs_update(source_df, out_file, temp_evt):
-    with fits.open(EVT_FILE) as hdul_src:
-        original_header = hdul_src[1].header.copy()
-        hdr0 = hdul_src[0].header.copy()
-
-    astropy_table = Table.from_pandas(source_df)
-    astropy_table['energy'] = astropy_table['energy'].astype(np.float32)
-    astropy_table['x'] = astropy_table['x'].astype(np.float32)
-    astropy_table['y'] = astropy_table['y'].astype(np.float32)
-
-    table_hdu = fits.BinTableHDU(data=astropy_table)
-
-    # 4. Critical: Sync the header
-    for key in original_header:
-        # Skip standard structural keywords that BinTableHDU manages
-        if key not in ['XTENSION', 'BITPIX', 'NAXIS', 'NAXIS1', 'NAXIS2', 'PCOUNT', 'GCOUNT', 'TFIELDS', 'COMMENT', 'HISTORY']:
-            if not key.startswith('TTYPE') and not key.startswith('TFORM'):
-                try:
-                    table_hdu.header[key] = original_header[key]
-                except ValueError:
-                    print(key)
-                    continue
-
-    # 5. Build the HDUList (FITS files need a PrimaryHDU at index 0)
-    phdu = fits.PrimaryHDU(header=hdr0) # You can copy hdul_src[0].header here if needed
-    hdul_out = fits.HDUList([phdu, table_hdu])
-
-    # 6. Save it
-    hdul_out.writeto(f"output/{out_file}", overwrite=True)
 
 # Save all as fits events files
 with fits.open(EVT_FILE) as hdul:
     solved_wcs = pywcs.WCS(hdul[0].header)
 
-for i, source in enumerate([*split_sources, table_bg]):
+for i, source in enumerate([*src_masks, bg_mask]):
     save_for_specextract(source, f"source_{i}.fits", EVT_FILE)
-    final_wcs_injection(f"output/source_{i}.fits", solved_wcs)
