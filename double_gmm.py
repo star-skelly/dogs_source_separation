@@ -6,7 +6,7 @@ from astropy.table import Table
 
 import pandas as pd
 import pyStarlet_master_2D1D as pys
-import subprocess
+from astropy import wcs as pywcs
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.mixture import GaussianMixture
@@ -32,7 +32,7 @@ XMAX = 4150 #4120
 YMIN = 4050 #4080
 YMAX = 4110 #4120
 
-EMIN = 2000
+EMIN = 300
 EMAX = 8000
 
 VMIN = 0.5
@@ -322,45 +322,57 @@ def save_df_as_fits(source_df, filename, template_evt_file):
             old_key = f"{pre}{old_col}"
             if old_key in hdr1:
                 new_hdr1[f"{pre}{new_col}"] = hdr1[old_key]
-
+    
     primary_hdu = fits.PrimaryHDU(header=hdr0)
     evt_hdu = fits.BinTableHDU(data=astropy_table, header=new_hdr1)
     evt_hdu.name = "EVENTS"
     hdul = fits.HDUList([primary_hdu, evt_hdu])
     hdul.writeto(f'output/{filename}', overwrite=True)
 
-def save_df_for_ciao(source_df, filename, template_evt_file):
-    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y']])
-    
-    with fits.open(template_evt_file) as hdul_template:
-        hdr0 = hdul_template[0].header.copy()
-        hdr1 = hdul_template[1].header.copy()
-        gti_hdu = hdul_template['GTI'].copy()
-
-    new_hdr1 = hdr1.copy()
-
-    with open('temp.txt', 'a') as f:
-        f.write('##########################')
-        for key in list(new_hdr1.keys()):
-            if key != "HISTORY" and key != "COMMENT":
-                f.write(key + ": " + str(new_hdr1[key]) + '\n')
-    
-    hdr1_del = ['ASOLFILE', 'COMMENT', 'HISTORY', 'CREATOR', 'DS_IDENT', 'TITLE', 'OBSERVER', 'OBJECT', 'OBS_ID', 'SEQ_NUM', 'MASKFILE']
-    
-    for k in hdr1_del:
-        del new_hdr1[k]
-    
-    del hdr0['DS_IDENT']
-    del hdr0['OBS_ID']
-    del hdr0['SEQ_NUM']
-    del hdr0['CREATOR']
-
-    primary_hdu = fits.PrimaryHDU(header=hdr0)
-    evt_hdu = fits.BinTableHDU(data=astropy_table, header=new_hdr1, name="EVENTS")
-    hdul = fits.HDUList([primary_hdu, evt_hdu, gti_hdu])
-    
-    final_out = f"output/{filename}"
-    hdul.writeto(final_out, overwrite=True)
+def final_wcs_injection(target_fits, wcs_obj):
+    """
+    Manually 'wires' the WCS object into the target FITS table 
+    specifically for CIAO specextract compatibility.
+    """
+    with fits.open(target_fits, mode='update') as hdul:
+        # Access the EVENTS table (usually index 1)
+        hdr = hdul['EVENTS'].header
+        
+        # 1. Map the RA/Dec center (CRVAL)
+        # wcs_obj.wcs.crval[0] is RA, [1] is Dec
+        hdr['CRVAL2'] = wcs_obj.wcs.crval[0]
+        hdr['CRVAL3'] = wcs_obj.wcs.crval[1]
+        
+        # 2. Map the Pixel Center (CRPIX)
+        # Chandra physical coords are usually centered at 4096.5
+        hdr['CRPIX2'] = wcs_obj.wcs.crpix[0]
+        hdr['CRPIX3'] = wcs_obj.wcs.crpix[1]
+        
+        # 3. Map the Pixel Scale (CDELT)
+        # Standard ACIS is ~0.492 arcsec/pixel => 0.00013666 deg
+        cdelt = wcs_obj.wcs.get_cdelt()
+        hdr['CDELT2'] = cdelt[0]
+        hdr['CDELT3'] = cdelt[1]
+        
+        # 4. Mandatory CIAO "Handshake" Keywords
+        # This tells specextract: 'Columns 2 and 3 are the Sky'
+        hdr['CTYPE2'] = 'x'
+        hdr['CTYPE3'] = 'y'
+        hdr['WCSTY2'] = 'PHYSICAL'
+        hdr['WCSTY3'] = 'PHYSICAL'
+        
+        # This points to the Coordinate System defined in ObsID 3392
+        hdr['ACSYS4'] = 'SKY:ASC-FP-1.1'
+        
+        # 5. The "Security Seal" (Data Subspace)
+        # This is the final step to make dmcoords work
+        hdr['DSTYP1'] = 'time'
+        hdr['DSVAL1'] = 'TABLE'
+        hdr['DSTYP2'] = 'x,y'
+        hdr['DSVAL2'] = 'specnum:1'
+        
+        hdul.flush()
+    print("WCS successfully wired to Columns 2 and 3.")
 
 cube, e_lvls = starlet_cube(subset)
 table_bg, table_sources = bg_fit(e_lvls = ['energy', 'starlet_0'])
@@ -369,6 +381,9 @@ bg_split_sources, cntrs, stddv = source_fit(table_bg, NB_SOURCE)
 plot_split([*split_sources, table_bg], f"2_split_{NB_SOURCE}sources.png")
 plot_split(bg_split_sources, f"2_split_{NB_SOURCE}bg.png")
 
-# Save all as fits events files
+with fits.open(EVT_FILE) as hdul:
+    solved_wcs = pywcs.WCS(hdul[1].header)
+
 for i, source in enumerate([*split_sources, table_bg]):
     save_df_as_fits(source, f"source_{i}.fits", EVT_FILE)
+    final_wcs_injection(f"output/source_{i}.fits", solved_wcs)
