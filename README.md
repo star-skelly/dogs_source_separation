@@ -1,0 +1,6 @@
+# DOGS (DOuble GMM Starlet) source separation technique
+
+In the crowded center of the Milky Way, it can be difficult to pick out specific objects for spectral and energy analysis. Blind source separation (BSS) allows for extracting scientifically meaningful observations about astrophysical objects. Traditional BSS methods, and more recent methods such as Generalized Morphological Component Analysis, struggle to extract compact and smooth separations in busy areas. In this work, we introduce a sequence of starlet-fitted Gaussian Mixture Models (GMMs), a flexible BSS framework that exploits the adaptable GMM probability fitting for multiple levels of structure from starlets. The framework first splits background from more compact objects and then splits the foreground objects into independent components. We use this separation framework to evaluate the spectral properties of distinct physical objects: Sgr A*, a pulsar wind nebula, star cluster, and the plasma environment in which they are embedded. It is generalizable, even allowing for splitting a pulsar wind nebula from its tail. Our results show the potential of this method for any astronomical observations and allows for extremely flexible fitting to new energy distributions.
+
+# Authors
+Salem Loucks, Lia Corrales, Jamila Taaki, Mayura Balakrishnan, *University of Michigan*

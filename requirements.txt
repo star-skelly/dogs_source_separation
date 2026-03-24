@@ -1,0 +1,6 @@
+astropy
+scikit-learn
+pandas
+torch
+matplotlib
+PyWavelets
