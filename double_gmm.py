@@ -53,13 +53,13 @@ NB_SOURCE = 4
 hdu = fits.open(EVT_FILE)
 evt_data = hdu[1].data
 
-cols = ['energy', 'x', 'y', 'ccd_id', 'sky(x,y)']
+cols = ['energy', 'x', 'y', 'ccd_id']
 df = Table([evt_data[c] for c in cols], names=cols, dtype=[np.float64, np.float64, np.float64, np.float64]).to_pandas()
 
 subset = df[(df['x'] > XMIN) & (df['x'] < XMAX) & \
             (df['y'] > YMIN) & (df['y'] < YMAX) & \
             (df['energy'] > EMIN) & (df['energy'] < EMAX)]
-
+print(len(subset))
 fig = plt.figure(figsize=(5, 2)) 
 ax1 = fig.add_subplot(1, 2, 1)
 h2d = ax1.hist2d(subset['x'], subset['y'], bins=(BINX, BINY), 
@@ -273,7 +273,7 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
 
     bg_mask = (labels == 0)
     if bg_second:
-        bg_mask = not bg_mask
+        bg_mask = ~bg_mask
 
     if bg_second:
         return table_sources, table_bg, bg_mask
@@ -326,11 +326,11 @@ def mask_source_fit(table_sources, nb_source=3):
     probs, labels, centers, std_devs = gmm_fitting(nb_source, table=table_sources, e_lvls=["energy"])
     masks = []
     for i in range(nb_source):
-        masks[i] = (labels == i)
+        masks.append(labels == i)
     return masks
 
 def save_df_as_fits(source_df, filename, template_evt_file):
-    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])
+    astropy_table = Table.from_pandas(source_df[['energy', 'x', 'y', 'weight']])    
     hdr0 = fits.getheader(template_evt_file, 0)
     hdr1 = fits.getheader(template_evt_file, 1).copy()
     
@@ -396,21 +396,38 @@ def save_for_specextract(source_df, out_filename, template_evt):
     hdul.writeto(f'output/{out_filename}', overwrite=True)
     print(f"Success! Blocks in file: {[h.name for h in hdul]}")
 
-def save_with_masks(mask, out, template):
+def save_with_bgmask(mask, bgmask, out, template):
     with fits.open(template) as hdul:
-        # Get the events table
-        events_hdu = hdul['EVENTS']
-        data = events_hdu.data
+        events_hdu = hdul['EVENTS']        
+        original_data = events_hdu.data
+        spatial_mask = (original_data['x'] > XMIN) & (original_data['x'] < XMAX) & \
+                    (original_data['y'] > YMIN) & (original_data['y'] < YMAX) & \
+                    (original_data['energy'] > EMIN) & (original_data['energy'] < EMAX)
 
-        mask = df.index.values 
-        filtered_data = data[mask]
+        subset_data = original_data[spatial_mask][~bgmask]
+        filtered_data = subset_data[mask]
         new_table_hdu = fits.BinTableHDU(data=filtered_data, header=events_hdu.header)
         
         new_hdul = fits.HDUList([hdul[0], new_table_hdu])
-        
+
         for i in range(2, len(hdul)):
             new_hdul.append(hdul[i])
             
+        new_hdul.writeto(f"output/{out}", overwrite=True)
+
+def save_with_masks(mask, out, template):
+    with fits.open(template) as hdul:
+        events_hdu = hdul['EVENTS']        
+        original_data = events_hdu.data
+        spatial_mask = (original_data['x'] > XMIN) & (original_data['x'] < XMAX) & \
+                    (original_data['y'] > YMIN) & (original_data['y'] < YMAX) & \
+                    (original_data['energy'] > EMIN) & (original_data['energy'] < EMAX)
+
+        subset_data = original_data[spatial_mask][mask]
+        new_table_hdu = fits.BinTableHDU(data=subset_data, header=events_hdu.header)
+        new_hdul = fits.HDUList([hdul[0], new_table_hdu])
+        for i in range(2, len(hdul)):
+            new_hdul.append(hdul[i])
         new_hdul.writeto(f"output/{out}", overwrite=True)
 
 cube, e_lvls = starlet_cube(subset)
@@ -423,5 +440,7 @@ plot_split([*split_sources, table_bg], f"2_split_{NB_SOURCE}sources.png")
 with fits.open(EVT_FILE) as hdul:
     solved_wcs = pywcs.WCS(hdul[0].header)
 
-for i, source in enumerate([*src_masks, bg_mask]):
-    save_for_specextract(source, f"source_{i}.fits", EVT_FILE)
+for i, source in enumerate(src_masks):
+    save_with_bgmask(source, bg_mask, f"source_{i}.fits", EVT_FILE)
+
+save_with_masks(bg_mask, f"source_{i+1}.fits", EVT_FILE)
