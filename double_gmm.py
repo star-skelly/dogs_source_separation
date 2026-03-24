@@ -46,7 +46,7 @@ VERBOSE = True
 
 # num_lvl + num_start = 5
 NUM_LVL = 2
-LVL_START = 2
+LVL_START = 1
 
 NB_SOURCE = 4
 
@@ -280,7 +280,7 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
     
     return table_bg, table_sources, bg_mask
 
-def source_fit(table_sources, nb_source=3):
+def source_fit(table_sources, nb_source=3, e_lvls=["energy"]):
     """Specific function for splitting the sources df into each source.
         Operates in energy level only. Defaults to 3 sources for our use case
 
@@ -298,7 +298,7 @@ def source_fit(table_sources, nb_source=3):
         the list of dataframes for each source, each with their own 'weight' column
         corresponding to [belongs to source i] weight * [belongs to a source] weight
     """
-    probs, labels, centers, std_devs = gmm_fitting(nb_source, table=table_sources, e_lvls=["energy"])
+    probs, labels, centers, std_devs = gmm_fitting(nb_source, table=table_sources, e_lvls=e_lvls)
     sources = []
     for i in range(nb_source):
         source_table = table_sources[labels == i][['energy', 'x', 'y']].copy()
@@ -364,7 +364,12 @@ def save_with_masks(mask, out, template):
         new_hdul.writeto(f"output/{out}", overwrite=True)
 
 cube, e_lvls = starlet_cube(subset)
-table_bg, table_sources, bg_mask = bg_fit(e_lvls = ['energy', 'starlet_0'])
+table_bg, table_sources, bg_mask = bg_fit(e_lvls = ['energy', 'starlet_0', 'starlet_1'])
+
+bg_nb_src = 4
+bg_split_srcs, ctrs, stddv  = source_fit(table_bg, bg_nb_src, e_lvls = ['energy', 'starlet_0', 'starlet_1'])
+plot_split([*bg_split_srcs, table_bg], f"2_bg_starlet_split_{bg_nb_src}sources.png")
+
 split_sources, centers, std_dev = source_fit(table_sources, NB_SOURCE)
 src_masks = mask_source_fit(table_sources, NB_SOURCE)
 plot_split([*split_sources, table_bg], f"2_split_{NB_SOURCE}sources.png")
