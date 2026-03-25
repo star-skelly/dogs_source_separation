@@ -26,27 +26,33 @@ import torch
 
 # DECLARE CONSTANTS
 
-EVT_FILE = '3392/repro/acisf03392_repro_evt2.fits' #'acisi_merged.fits'
-XMIN = 4110 #4085
-XMAX = 4150 #4120
-YMIN = 4050 #4080
-YMAX = 4110 #4120
+EVT_FILE = 'acisi_merged.fits'
+XMIN = 4085
+XMAX = 4120
+YMIN = 4080
+YMAX = 4120
 
-EMIN = 300
+#EVT_FILE = '3392/repro/acisf03392_repro_evt2.fits'
+#XMIN = 4110
+#XMAX = 4150 
+#YMIN = 4050
+#YMAX = 4110
+
+EMIN = 1500
 EMAX = 8000
 
 VMIN = 0.5
 VMAX = 1e3
 
-BINX = 64
-BINY = 64
-BINE = 60
+BINX = 128
+BINY = 128
+BINE = 100
 
 VERBOSE = True
 
 # num_lvl + num_start = 5
 NUM_LVL = 2
-LVL_START = 1
+LVL_START = 2
 
 NB_SOURCE = 4
 
