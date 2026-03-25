@@ -6,14 +6,19 @@ In the crowded center of the Milky Way, it can be difficult to pick out specific
 
 Below is the successful separation of the galactic core using DOGS.
 
+### Input View of the Galactic Core
+
+<img height="200" alt="zoomed in view of the galactic core" src="https://github.com/user-attachments/assets/68f2b537-73f7-4e79-ad7b-2480b1925665" />
+
+
 ### Stage 1 of separation (background split from objects)
 
-<img src="1_bg_sources_split.png" alt="stage 1 separation" width="200"/>
+<img src="1_bg_sources_split.png" alt="stage 1 separation" height="200"/>
 
 
 ### Stage 2 of separation (objects split from each other)
 
-<img src="2_split_4sources.png" alt="stage 2 separation" width="200"/>
+<img src="2_split_4sources.png" alt="stage 2 separation" height="200"/>
 
 
 __Source 0:__ tail of the pulsar wind nebula
