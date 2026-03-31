@@ -26,7 +26,7 @@ import torch
 
 # DECLARE CONSTANTS
 
-EVT_FILE = 'acisi_merged.fits'
+EVT_FILE = 'acisi_merged.fits' # ../acisi_merged.fits for starlet stuff
 XMIN = 4085
 XMAX = 4120
 YMIN = 4080
@@ -369,6 +369,48 @@ def save_with_masks(mask, out, template):
             new_hdul.append(hdul[i])
         new_hdul.writeto(f"output/{out}", overwrite=True)
 
+# try faking the fits file evt with single file header
+def save_with_bgmask_fake(mask, bgmask, out):
+    single_file_events_hdu = []
+    with fits.open('3392/repro/acisf03392_repro_evt2.fits') as hdul1:
+        single_file_events_hdu = hdul1['EVENTS'] 
+        
+    with fits.open('acisi_merged.fits') as hdul:
+        events_hdu = hdul['EVENTS']        
+        original_data = events_hdu.data
+        spatial_mask = (original_data['x'] > XMIN) & (original_data['x'] < XMAX) & \
+                    (original_data['y'] > YMIN) & (original_data['y'] < YMAX) & \
+                    (original_data['energy'] > EMIN) & (original_data['energy'] < EMAX)
+
+        subset_data = original_data[spatial_mask][~bgmask]
+        filtered_data = subset_data[mask]
+        new_table_hdu = fits.BinTableHDU(data=filtered_data, header=single_file_events_hdu.header)
+        
+        new_hdul = fits.HDUList([hdul[0], new_table_hdu])
+
+        for i in range(2, len(hdul)):
+            new_hdul.append(hdul[i])
+            
+        new_hdul.writeto(f"output/{out}", overwrite=True)
+def save_with_masks_fake(mask, out):
+    single_file_events_hdu = []
+    with fits.open('3392/repro/acisf03392_repro_evt2.fits') as hdul1:
+        single_file_events_hdu = hdul1['EVENTS'] 
+
+    with fits.open('acisi_merged.fits') as hdul:
+        events_hdu = hdul['EVENTS']        
+        original_data = events_hdu.data
+        spatial_mask = (original_data['x'] > XMIN) & (original_data['x'] < XMAX) & \
+                    (original_data['y'] > YMIN) & (original_data['y'] < YMAX) & \
+                    (original_data['energy'] > EMIN) & (original_data['energy'] < EMAX)
+
+        subset_data = original_data[spatial_mask][mask]
+        new_table_hdu = fits.BinTableHDU(data=subset_data, header=single_file_events_hdu.header)
+        new_hdul = fits.HDUList([hdul[0], new_table_hdu])
+        for i in range(2, len(hdul)):
+            new_hdul.append(hdul[i])
+        new_hdul.writeto(f"output/{out}", overwrite=True)
+
 cube, e_lvls = starlet_cube(subset)
 table_bg, table_sources, bg_mask = bg_fit(e_lvls = ['energy', 'starlet_0', 'starlet_1'])
 
@@ -385,6 +427,6 @@ with fits.open(EVT_FILE) as hdul:
     solved_wcs = pywcs.WCS(hdul[0].header)
 
 for i, source in enumerate(src_masks):
-    save_with_bgmask(source, bg_mask, f"source_{i}.fits", EVT_FILE)
+    save_with_bgmask_fake(source, bg_mask, f"source_{i}.fits")
 
-save_with_masks(bg_mask, f"source_{i+1}.fits", EVT_FILE)
+save_with_masks_fake(bg_mask, f"source_{i+1}.fits")
