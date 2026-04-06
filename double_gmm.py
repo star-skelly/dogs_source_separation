@@ -230,7 +230,7 @@ def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1
         u = w[0] / np.linalg.norm(w[0])
         angle = np.arctan2(u[1], u[0])
         angle = 180 * angle / np.pi  # convert to degrees
-        v = 2.0 * np.sqrt(2.0) * np.sqrt(v)
+        v = np.sqrt(v)
 
         std_devs.append([v[0], v[1], 180 + angle])
     
