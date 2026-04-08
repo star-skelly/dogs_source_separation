@@ -4,3 +4,4 @@ pandas
 torch
 matplotlib
 PyWavelets
+basemap>=1.4.0

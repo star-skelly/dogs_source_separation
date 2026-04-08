@@ -26,7 +26,8 @@ import torch
 
 # DECLARE CONSTANTS
 
-EVT_FILE = 'acisi_merged.fits' # ../acisi_merged.fits for starlet stuff
+EVT_FILE = 'acisi_merged.fits' # ../acisi_merged.fits for markov stuff
+REPRO_FILE = '3392/repro/acisf03392_repro_evt2.fits'
 XMIN = 4085
 XMAX = 4120
 YMIN = 4080
@@ -44,15 +45,14 @@ EMAX = 8000
 VMIN = 0.5
 VMAX = 1e3
 
-BINX = 128
-BINY = 128
-BINE = 100
+BINX = 64
+BINY = 64
+BINE = 50
 
 VERBOSE = True
 
-# num_lvl + num_start = 5
-NUM_LVL = 2
-LVL_START = 2
+NUM_LVL = 3
+LVL_START = 1
 
 NB_SOURCE = 4
 
@@ -95,7 +95,6 @@ def plot_split(sources, figname):
     fig, axes = plt.subplots(2, nb_source, figsize=(3 * nb_source, 6))
 
     for i in range(nb_source):
-        # --- ROW 1: SPATIAL (TOP) ---
         ax_top = axes[0, i]
         h = ax_top.hist2d(
             sources[i]['x'],
@@ -103,24 +102,23 @@ def plot_split(sources, figname):
             bins=(BINX, BINY),
             range=[[XMIN, XMAX], [YMIN, YMAX]],
             weights=sources[i]['weight'],
-            cmap='plasma',
+            cmap='viridis',
             norm=LogNorm(vmin=VMIN, vmax=VMAX)
         )
         ax_top.set_title(f'Spatial Source {i}')
         ax_top.xaxis.set_visible(False)
         ax_top.yaxis.set_visible(False)
 
-        # --- ROW 2: SPECTRAL (BOTTOM) ---
         ax_bottom = axes[1, i]
         ax_bottom.hist(
             sources[i]['energy']/1e3,
             bins=BINE,
             histtype='step',
-            color='crimson'
+            color='blue'
         )
         ax_bottom.set_title(f'Source {i} Energy Spectrum')
         ax_bottom.set_xlabel('keV')
-        ax_bottom.set_ylabel('Weighted Counts')
+        ax_bottom.set_ylabel('Event Counts')
     plt.tight_layout()
     plt.savefig(f"output/{figname}")
 
@@ -372,10 +370,10 @@ def save_with_masks(mask, out, template):
 # try faking the fits file evt with single file header
 def save_with_bgmask_fake(mask, bgmask, out):
     single_file_events_hdu = []
-    with fits.open('3392/repro/acisf03392_repro_evt2.fits') as hdul1:
+    with fits.open(REPRO_FILE) as hdul1:
         single_file_events_hdu = hdul1['EVENTS'] 
         
-    with fits.open('acisi_merged.fits') as hdul:
+    with fits.open(EVT_FILE) as hdul:
         events_hdu = hdul['EVENTS']        
         original_data = events_hdu.data
         spatial_mask = (original_data['x'] > XMIN) & (original_data['x'] < XMAX) & \
@@ -394,10 +392,10 @@ def save_with_bgmask_fake(mask, bgmask, out):
         new_hdul.writeto(f"output/{out}", overwrite=True)
 def save_with_masks_fake(mask, out):
     single_file_events_hdu = []
-    with fits.open('3392/repro/acisf03392_repro_evt2.fits') as hdul1:
+    with fits.open(REPRO_FILE) as hdul1:
         single_file_events_hdu = hdul1['EVENTS'] 
 
-    with fits.open('acisi_merged.fits') as hdul:
+    with fits.open(EVT_FILE) as hdul:
         events_hdu = hdul['EVENTS']        
         original_data = events_hdu.data
         spatial_mask = (original_data['x'] > XMIN) & (original_data['x'] < XMAX) & \
