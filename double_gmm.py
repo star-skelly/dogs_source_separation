@@ -45,14 +45,14 @@ EMAX = 8000
 VMIN = 0.5
 VMAX = 1e3
 
-BINX = 64
-BINY = 64
-BINE = 50
+BINX = 128
+BINY = 128
+BINE = 100
 
 VERBOSE = True
 
-NUM_LVL = 3
-LVL_START = 1
+NUM_LVL = 2
+LVL_START = 2
 
 NB_SOURCE = 4
 
@@ -81,7 +81,7 @@ ax2.set_title('Energy Spectrum')
 plt.tight_layout()
 plt.savefig("output/0_input_data.png")
 
-def plot_split(sources, figname):
+def plot_split(sources, source_names, figname):
     """Plotting helper function. Plots spatial and spectral sources
 
     Parameters
@@ -102,10 +102,10 @@ def plot_split(sources, figname):
             bins=(BINX, BINY),
             range=[[XMIN, XMAX], [YMIN, YMAX]],
             weights=sources[i]['weight'],
-            cmap='viridis',
+            cmap='magma',
             norm=LogNorm(vmin=VMIN, vmax=VMAX)
         )
-        ax_top.set_title(f'Spatial Source {i}')
+        ax_top.set_title(f'{source_names[i]} Probability', size=12)
         ax_top.xaxis.set_visible(False)
         ax_top.yaxis.set_visible(False)
 
@@ -116,7 +116,7 @@ def plot_split(sources, figname):
             histtype='step',
             color='blue'
         )
-        ax_bottom.set_title(f'Source {i} Energy Spectrum')
+        ax_bottom.set_title(f'{source_names[i]} Spectrum', size=12)
         ax_bottom.set_xlabel('keV')
         ax_bottom.set_ylabel('Event Counts')
     plt.tight_layout()
@@ -268,7 +268,7 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
     table_sources['weight'] = probs[labels == 1, 1]
 
     print("Background table should be larger than sources table.")
-    plot_split([table_bg, table_sources], "1_bg_sources_split.png")
+    plot_split([table_bg, table_sources], ["Background", "Foreground"], "1_bg_sources_split.png")
     
     # TODO: better way of determining bg/sources that doesn't rely on size
     # ... image variation loss? but then we have to convert to images first...
@@ -414,11 +414,11 @@ table_bg, table_sources, bg_mask = bg_fit(e_lvls = ['energy', 'starlet_0', 'star
 
 bg_nb_src = 4
 bg_split_srcs, ctrs, stddv  = source_fit(table_bg, bg_nb_src, e_lvls = ['energy', 'starlet_0', 'starlet_1'])
-plot_split([*bg_split_srcs, table_bg], f"2_bg_starlet_split_{bg_nb_src}sources.png")
+#plot_split([*bg_split_srcs, table_bg], f"2_bg_starlet_split_{bg_nb_src}sources.png")
 
 split_sources, centers, std_dev = source_fit(table_sources, NB_SOURCE)
 src_masks = mask_source_fit(table_sources, NB_SOURCE)
-plot_split([*split_sources, table_bg], f"2_split_{NB_SOURCE}sources.png")
+plot_split([*split_sources, table_bg], ["IRS 13", "Pulsar Wind Nebula Core", "Sgr A*", "Pulsar Wind Nebula Tail", "Background"], f"2_split_{NB_SOURCE}sources.png")
 
 # Save all as fits events files
 with fits.open(EVT_FILE) as hdul:
