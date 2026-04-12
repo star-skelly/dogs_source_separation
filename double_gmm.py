@@ -102,6 +102,7 @@ def plot_split(sources, source_names, figname):
             bins=(BINX, BINY),
             range=[[XMIN, XMAX], [YMIN, YMAX]],
             weights=sources[i]['weight'],
+            density=False,
             cmap='magma',
             norm=LogNorm(vmin=VMIN, vmax=VMAX)
         )
@@ -112,6 +113,8 @@ def plot_split(sources, source_names, figname):
         ax_bottom = axes[1, i]
         ax_bottom.hist(
             sources[i]['energy']/1e3,
+            weights=sources[i]['weight'],
+            density=False,
             bins=BINE,
             histtype='step',
             color='blue'
