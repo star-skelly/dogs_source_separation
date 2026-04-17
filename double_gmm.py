@@ -30,7 +30,7 @@ EVT_FILE = 'acisi_merged.fits' # ../acisi_merged.fits for markov stuff
 REPRO_FILE = '3392/repro/acisf03392_repro_evt2.fits'
 XMIN = 4085
 XMAX = 4120
-YMIN = 4080
+YMIN = 4085
 YMAX = 4120
 
 #EVT_FILE = '3392/repro/acisf03392_repro_evt2.fits'
@@ -47,11 +47,11 @@ VMAX = 1e3
 
 BINX = 128
 BINY = 128
-BINE = 100
+BINE = 50
 
 VERBOSE = True
 
-NUM_LVL = 2
+NUM_LVL = 3
 LVL_START = 2
 
 NB_SOURCE = 4
@@ -81,7 +81,7 @@ ax2.set_title('Energy Spectrum')
 plt.tight_layout()
 plt.savefig("output/0_input_data.png")
 
-def plot_split(sources, source_names, figname):
+def plot_split(sources, figname, source_names=None):
     """Plotting helper function. Plots spatial and spectral sources
 
     Parameters
@@ -93,7 +93,7 @@ def plot_split(sources, source_names, figname):
     """
     nb_source = len(sources)
     fig, axes = plt.subplots(2, nb_source, figsize=(3 * nb_source, 6))
-
+    
     for i in range(nb_source):
         ax_top = axes[0, i]
         h = ax_top.hist2d(
@@ -106,20 +106,18 @@ def plot_split(sources, source_names, figname):
             cmap='magma',
             norm=LogNorm(vmin=VMIN, vmax=VMAX)
         )
-        ax_top.set_title(f'{source_names[i]} Probability', size=12)
+        ax_top.set_title(f'Source {i} Probability', size=12)
         ax_top.xaxis.set_visible(False)
         ax_top.yaxis.set_visible(False)
 
         ax_bottom = axes[1, i]
         ax_bottom.hist(
             sources[i]['energy']/1e3,
-            weights=sources[i]['weight'],
-            density=False,
             bins=BINE,
             histtype='step',
             color='blue'
         )
-        ax_bottom.set_title(f'{source_names[i]} Spectrum', size=12)
+        ax_bottom.set_title(f'Source {i} Spectrum', size=12)
         ax_bottom.set_xlabel('keV')
         ax_bottom.set_ylabel('Event Counts')
     plt.tight_layout()
@@ -337,6 +335,20 @@ def mask_source_fit(table_sources, nb_source=3):
     return masks
 
 def save_with_bgmask(mask, bgmask, out, template):
+    """Save events list as fits file, filtered by mask 
+        & bgmask, using the template file WCS
+
+    Parameters
+    ---------- 
+    mask : list
+        list of 1s & 0s for each photon, whether it belongs to a specific source
+    bgmask : list
+        list of 1s & 0s for each photon, whether it belongs to background
+    out: str
+        name of outfile
+    template: str
+        name of input fits file to be used as a template for saving (with proper WCS)
+    """
     with fits.open(template) as hdul:
         events_hdu = hdul['EVENTS']        
         original_data = events_hdu.data
@@ -356,6 +368,17 @@ def save_with_bgmask(mask, bgmask, out, template):
         new_hdul.writeto(f"output/{out}", overwrite=True)
 
 def save_with_masks(mask, out, template):
+    """Save events list as fits file, filtered by mask, using the template file WCS
+
+    Parameters
+    ---------- 
+    mask : list
+        list of 1s & 0s for each photon, whether it belongs to a specific source
+    out: str
+        name of outfile
+    template: str
+        name of input fits file to be used as a template for saving (with proper WCS)
+    """
     with fits.open(template) as hdul:
         events_hdu = hdul['EVENTS']        
         original_data = events_hdu.data
@@ -372,6 +395,19 @@ def save_with_masks(mask, out, template):
 
 # try faking the fits file evt with single file header
 def save_with_bgmask_fake(mask, bgmask, out):
+    """Save events list as fits file, with faked WCS so specextract works
+
+    Parameters
+    ---------- 
+    mask : list
+        list of 1s & 0s for each photon, whether it belongs to a specific source
+    bgmask : list
+        list of 1s & 0s for each photon, whether it belongs to background
+    out: str
+        name of outfile
+    template: str
+        name of input fits file to be used as a template for saving (with proper WCS)
+    """
     single_file_events_hdu = []
     with fits.open(REPRO_FILE) as hdul1:
         single_file_events_hdu = hdul1['EVENTS'] 
@@ -393,7 +429,18 @@ def save_with_bgmask_fake(mask, bgmask, out):
             new_hdul.append(hdul[i])
             
         new_hdul.writeto(f"output/{out}", overwrite=True)
+
 def save_with_masks_fake(mask, out):
+    """Save events list as fits file, filtered by mask, 
+        with faked WCS so specextract works
+
+    Parameters
+    ---------- 
+    mask : list
+        list of 1s & 0s for each photon, whether it belongs to a specific source
+    out: str
+        name of outfile
+    """
     single_file_events_hdu = []
     with fits.open(REPRO_FILE) as hdul1:
         single_file_events_hdu = hdul1['EVENTS'] 
@@ -417,7 +464,7 @@ table_bg, table_sources, bg_mask = bg_fit(e_lvls = ['energy', 'starlet_0', 'star
 
 bg_nb_src = 4
 bg_split_srcs, ctrs, stddv  = source_fit(table_bg, bg_nb_src, e_lvls = ['energy', 'starlet_0', 'starlet_1'])
-#plot_split([*bg_split_srcs, table_bg], f"2_bg_starlet_split_{bg_nb_src}sources.png")
+plot_split([*bg_split_srcs, table_bg], f"2_bg_starlet_split_{bg_nb_src}sources.png")
 
 split_sources, centers, std_dev = source_fit(table_sources, NB_SOURCE)
 src_masks = mask_source_fit(table_sources, NB_SOURCE)
