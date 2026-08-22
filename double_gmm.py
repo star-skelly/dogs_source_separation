@@ -25,22 +25,47 @@ import torch
 # then you could load into xspec!
 
 # DECLARE CONSTANTS
+import argparse
+import os
 
-EVT_FILE = 'acisi_merged.fits' # ../acisi_merged.fits for markov stuff
-REPRO_FILE = '3392/repro/acisf03392_repro_evt2.fits'
-XMIN = 4085
-XMAX = 4120
-YMIN = 4085
-YMAX = 4120
+parser = argparse.ArgumentParser()
+parser.add_argument('--evt-file', required=True, help='reprojected per-obsid event file')
+parser.add_argument('--repro-file', required=True, help='original per-obsid repro evt2 file (for header)')
+parser.add_argument('--xmin', type=float, required=True)
+parser.add_argument('--xmax', type=float, required=True)
+parser.add_argument('--ymin', type=float, required=True)
+parser.add_argument('--ymax', type=float, required=True)
+parser.add_argument('--emin', type=float, default=500)   # adjust to your existing EMIN default
+parser.add_argument('--emax', type=float, default=7000)  # adjust to your existing EMAX default
+parser.add_argument('--outdir', default='output')
+parser.add_argument('--tag', required=True, help='obsid, used as filename prefix')
+args = parser.parse_args()
 
-#EVT_FILE = '3392/repro/acisf03392_repro_evt2.fits'
-#XMIN = 4110
-#XMAX = 4150 
-#YMIN = 4050
-#YMAX = 4110
+EVT_FILE   = args.evt_file
+REPRO_FILE = args.repro_file
+XMIN, XMAX = args.xmin, args.xmax
+YMIN, YMAX = args.ymin, args.ymax
+EMIN, EMAX = args.emin, args.emax
+OUTDIR     = args.outdir
+TAG        = args.tag
 
-EMIN = 1500
-EMAX = 8000
+os.makedirs(OUTDIR, exist_ok=True)
+
+# EVT_FILE = 'acisi_merged.fits' # ../acisi_merged.fits for markov stuff
+# REPRO_FILE = '3392/repro/acisf03392_repro_evt2.fits'
+# XMIN = 4085
+# XMAX = 4120
+# YMIN = 4085
+# YMAX = 4120
+
+# #EVT_FILE = '3392/repro/acisf03392_repro_evt2.fits'
+# #XMIN = 4110
+# #XMAX = 4150 
+# #YMIN = 4050
+# #YMAX = 4110
+
+# EMIN = 1500
+# EMAX = 8000
 
 VMIN = 0.5
 VMAX = 1e3
@@ -365,7 +390,7 @@ def save_with_bgmask(mask, bgmask, out, template):
         for i in range(2, len(hdul)):
             new_hdul.append(hdul[i])
             
-        new_hdul.writeto(f"output/{out}", overwrite=True)
+        new_hdul.writeto(f"{OUTDIR}/{out}", overwrite=True)
 
 def save_with_masks(mask, out, template):
     """Save events list as fits file, filtered by mask, using the template file WCS
@@ -391,7 +416,7 @@ def save_with_masks(mask, out, template):
         new_hdul = fits.HDUList([hdul[0], new_table_hdu])
         for i in range(2, len(hdul)):
             new_hdul.append(hdul[i])
-        new_hdul.writeto(f"output/{out}", overwrite=True)
+        new_hdul.writeto(f"{OUTDIR}/{out}", overwrite=True)
 
 # try faking the fits file evt with single file header
 def save_with_bgmask_fake(mask, bgmask, out):
@@ -428,7 +453,7 @@ def save_with_bgmask_fake(mask, bgmask, out):
         for i in range(2, len(hdul)):
             new_hdul.append(hdul[i])
             
-        new_hdul.writeto(f"output/{out}", overwrite=True)
+        new_hdul.writeto(f"{OUTDIR}/{out}", overwrite=True)
 
 def save_with_masks_fake(mask, out):
     """Save events list as fits file, filtered by mask, 
@@ -457,7 +482,7 @@ def save_with_masks_fake(mask, out):
         new_hdul = fits.HDUList([hdul[0], new_table_hdu])
         for i in range(2, len(hdul)):
             new_hdul.append(hdul[i])
-        new_hdul.writeto(f"output/{out}", overwrite=True)
+        new_hdul.writeto(f"{OUTDIR}/{out}", overwrite=True)
 
 cube, e_lvls = starlet_cube(subset)
 table_bg, table_sources, bg_mask = bg_fit(e_lvls = ['energy', 'starlet_0', 'starlet_1'])
@@ -475,6 +500,6 @@ with fits.open(EVT_FILE) as hdul:
     solved_wcs = pywcs.WCS(hdul[0].header)
 
 for i, source in enumerate(src_masks):
-    save_with_bgmask_fake(source, bg_mask, f"source_{i}.fits")
+    save_with_bgmask_fake(source, bg_mask, f"{TAG}_source_{i}.fits")
 
-save_with_masks_fake(bg_mask, f"source_{i+1}.fits")
+save_with_masks_fake(bg_mask, f"{TAG}_source_{i+1}.fits")
