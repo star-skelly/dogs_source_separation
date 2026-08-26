@@ -23,6 +23,8 @@ for f in reproj_files:
         "--ymin", str(YMIN), "--ymax", str(YMAX),
         "--outdir", outdir,
         "--tag", obsid,
+        "--mode", "classify",
+        "--models-dir", "../models"
     ]
     print("Running:", " ".join(cmd))
     subprocess.run(cmd, check=True)
