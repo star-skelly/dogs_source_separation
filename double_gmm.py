@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import json
+import joblib
 
 from astropy.io import fits
 from astropy.table import Table
@@ -39,6 +41,10 @@ parser.add_argument('--emin', type=float, default=500)   # adjust to your existi
 parser.add_argument('--emax', type=float, default=7000)  # adjust to your existing EMAX default
 parser.add_argument('--outdir', default='output')
 parser.add_argument('--tag', required=True, help='obsid, used as filename prefix')
+parser.add_argument('--mode', choices=['fit', 'classify'], default='fit',
+    help="'fit': fit fresh GMMs — run this exactly once, on the merged file. "
+         "'classify': load models from --models-dir and classify this obsid's events against them, no fitting.")
+parser.add_argument('--models-dir', default='models')
 args = parser.parse_args()
 
 EVT_FILE   = args.evt_file
@@ -48,24 +54,27 @@ YMIN, YMAX = args.ymin, args.ymax
 EMIN, EMAX = args.emin, args.emax
 OUTDIR     = args.outdir
 TAG        = args.tag
-
-os.makedirs(OUTDIR, exist_ok=True)
+MODE = args.mode
+MODELS_DIR = args.models_dir
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 # EVT_FILE = 'acisi_merged.fits' # ../acisi_merged.fits for markov stuff
 # REPRO_FILE = '3392/repro/acisf03392_repro_evt2.fits'
+# OUTDIR = 'output'
+# TAG = 'base'
 # XMIN = 4085
 # XMAX = 4120
 # YMIN = 4085
 # YMAX = 4120
 
-# #EVT_FILE = '3392/repro/acisf03392_repro_evt2.fits'
-# #XMIN = 4110
-# #XMAX = 4150 
-# #YMIN = 4050
-# #YMAX = 4110
+#EVT_FILE = '3392/repro/acisf03392_repro_evt2.fits'
+#XMIN = 4110
+#XMAX = 4150 
+#YMIN = 4050
+#YMAX = 4110
 
-# EMIN = 1500
-# EMAX = 8000
+EMIN = 1500
+EMAX = 8000
 
 VMIN = 0.5
 VMAX = 1e3
@@ -80,6 +89,8 @@ NUM_LVL = 3
 LVL_START = 2
 
 NB_SOURCE = 4
+
+os.makedirs(OUTDIR, exist_ok=True)
 
 hdu = fits.open(EVT_FILE)
 evt_data = hdu[1].data
@@ -204,7 +215,7 @@ def starlet_cube(subset, lvl_start=LVL_START, num_lvl=NUM_LVL, include_raw=True)
     
     return starlet_cube, e_lvls
 
-def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
+def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1'], fitted_model=None):
     """Fits a GMM to a table, given the number of components and the energy levels to include.
     
     Parameters
@@ -226,25 +237,29 @@ def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1
         x, y pairs for the center of each component
     std_devs : list
         x, y pairs for the spread of each component
+    fitted_model : dict or None
+        {'gmm': GaussianMixture, 'scaler': StandardScaler} already fit elsewhere.
+        If given, skips fitting — only transforms + classifies `table` against it.
     """
-    std_scaler = StandardScaler()
-    scaled_df = std_scaler.fit_transform(table[['x', 'y', *e_lvls]])
+    if fitted_model is None:
+        std_scaler = StandardScaler()
+        scaled_df = std_scaler.fit_transform(table[['x', 'y', *e_lvls]])
+        gmm = GaussianMixture(n_components=ncomp, covariance_type='full', random_state=0)
+        gmm.fit(scaled_df)
+    else:
+        std_scaler = fitted_model['scaler']
+        gmm = fitted_model['gmm']
+        scaled_df = std_scaler.transform(table[['x', 'y', *e_lvls]])  # transform only
+        ncomp = gmm.n_components
 
-    gmm = GaussianMixture(
-        n_components=ncomp,
-        covariance_type='full',   # most flexible; try 'diag' for faster
-        random_state=0
-    )
-
-    gmm.fit(scaled_df)
     probs = gmm.predict_proba(scaled_df)
-    labels = gmm.predict(scaled_df) 
+    labels = gmm.predict(scaled_df)
 
     centers_scaled = gmm.means_
-    centers_original = std_scaler.inverse_transform(centers_scaled) # since we used standard scaler, have to transform back
+    centers_original = std_scaler.inverse_transform(centers_scaled)
     covariances = gmm.covariances_
-    std_devs = [] # should be a list of [std_x, std_y, theta]
-    
+    std_devs = [] 
+
     if VERBOSE:
         for i, center in enumerate(centers_original):
             print(f"Cluster {i} Center: x={center[0]:.2f}, y={center[1]:.2f}")
@@ -253,17 +268,15 @@ def gmm_fitting(ncomp, table=subset, e_lvls = ['energy', 'starlet_0', 'starlet_1
         v, w = np.linalg.eigh(covariances[i][:2, :2])
         u = w[0] / np.linalg.norm(w[0])
         angle = np.arctan2(u[1], u[0])
-        angle = 180 * angle / np.pi  # convert to degrees
+        angle = 180 * angle / np.pi
         v = np.sqrt(v)
-
         std_devs.append([v[0], v[1], 180 + angle])
-    
-        if VERBOSE: 
+        if VERBOSE:
             print(f"Cluster {i} Spread (Scaled Units): x_std={std_devs[i][0]:.2f}, y_std={std_devs[i][1]:.2f}, theta={std_devs[i][2]:.2f}")
 
-    return probs, labels, centers_original, std_devs
+    return probs, labels, centers_original, std_devs, gmm, std_scaler
 
-def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
+def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1'], fitted_model=None, forced_bg_second=None):
     """Specific function for splitting the image into background and sources.
         Operates by splitting mostly along the starlet levels, which is activated
         in regions where there seems to be a star-like shape.
@@ -285,32 +298,33 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1']):
         probability of each pixel belonging to a source rather than background.
           
     """
-    probs, labels, centers, cov = gmm_fitting(ncomp, e_lvls=e_lvls)
+    probs, labels, centers, cov, gmm, scaler = gmm_fitting(ncomp, e_lvls=e_lvls, fitted_model=fitted_model)
     
     table_bg = subset[labels == 0][[*e_lvls, 'x', 'y']].copy()
     table_sources = subset[labels == 1][[*e_lvls, 'x', 'y']].copy()
-
     table_bg['weight'] = probs[labels == 0, 0]
     table_sources['weight'] = probs[labels == 1, 1]
 
     print("Background table should be larger than sources table.")
-    plot_split([table_bg, table_sources], ["Background", "Foreground"], "1_bg_sources_split.png")
+    plot_split([table_bg, table_sources], ["Background", "Foreground"], f"{TAG}_1_bg_sources_split.png")
     
     # TODO: better way of determining bg/sources that doesn't rely on size
     # ... image variation loss? but then we have to convert to images first...
     
-    bg_second = len(table_bg) < len(table_sources)
+    if forced_bg_second is not None:
+        bg_second = forced_bg_second       # classify mode: use the merged fit's decision
+    else:
+        bg_second = len(table_bg) < len(table_sources)   # fit mode: decide once, here
 
     bg_mask = (labels == 0)
     if bg_second:
         bg_mask = ~bg_mask
 
     if bg_second:
-        return table_sources, table_bg, bg_mask
-    
-    return table_bg, table_sources, bg_mask
+        return table_sources, table_bg, bg_mask, gmm, scaler, bg_second
+    return table_bg, table_sources, bg_mask, gmm, scaler, bg_second
 
-def source_fit(table_sources, nb_source=3, e_lvls=["energy"]):
+def source_fit(table_sources, nb_source=3, e_lvls=["energy"], fitted_model=None):
     """Specific function for splitting the sources df into each source.
         Operates in energy level only. Defaults to 3 sources for our use case
 
@@ -328,13 +342,17 @@ def source_fit(table_sources, nb_source=3, e_lvls=["energy"]):
         the list of dataframes for each source, each with their own 'weight' column
         corresponding to [belongs to source i] weight * [belongs to a source] weight
     """
-    probs, labels, centers, std_devs = gmm_fitting(nb_source, table=table_sources, e_lvls=e_lvls)
+    probs, labels, centers, std_devs, gmm, scaler = gmm_fitting(
+        nb_source, table=table_sources, e_lvls=e_lvls, fitted_model=fitted_model
+    )
     sources = []
+    masks = []
     for i in range(nb_source):
         source_table = table_sources[labels == i][['energy', 'x', 'y']].copy()
         source_table['weight'] = probs[labels == i, i] * table_sources[labels == i]['weight']
         sources.append(source_table)
-    return sources, centers, std_devs
+        masks.append(labels == i)
+    return sources, centers, std_devs, masks, gmm, scaler
 
 def mask_source_fit(table_sources, nb_source=3):
     """Specific function for splitting the sources df into each source.
@@ -485,21 +503,58 @@ def save_with_masks_fake(mask, out):
         new_hdul.writeto(f"{OUTDIR}/{out}", overwrite=True)
 
 cube, e_lvls = starlet_cube(subset)
-table_bg, table_sources, bg_mask = bg_fit(e_lvls = ['energy', 'starlet_0', 'starlet_1'])
 
+bg_fitted_model = None
+src_fitted_model = None
+forced_bg_second = None
+if MODE == 'classify':
+    bg_saved = joblib.load(f"{MODELS_DIR}/bg_model.joblib")
+    src_saved = joblib.load(f"{MODELS_DIR}/src_model.joblib")
+    bg_fitted_model = {"gmm": bg_saved["gmm"], "scaler": bg_saved["scaler"]}
+    src_fitted_model = {"gmm": src_saved["gmm"], "scaler": src_saved["scaler"]}
+    forced_bg_second = bg_saved["bg_second"]
+
+table_bg, table_sources, bg_mask, bg_gmm, bg_scaler, bg_second = bg_fit(
+    e_lvls=['energy', 'starlet_0', 'starlet_1'],
+    fitted_model=bg_fitted_model,
+    forced_bg_second=forced_bg_second,
+)
+
+# Diagnostic-only plot (never saved as event files) — leave this fitting fresh
+# every time regardless of mode, it doesn't feed into anything downstream.
 bg_nb_src = 4
-bg_split_srcs, ctrs, stddv  = source_fit(table_bg, bg_nb_src, e_lvls = ['energy', 'starlet_0', 'starlet_1'])
-plot_split([*bg_split_srcs, table_bg], f"2_bg_starlet_split_{bg_nb_src}sources.png")
+bg_split_srcs, ctrs, stddv, _, _, _ = source_fit(table_bg, bg_nb_src, e_lvls=['energy', 'starlet_0', 'starlet_1'])
+plot_split([*bg_split_srcs, table_bg], f"{TAG}_2_bg_starlet_split_{bg_nb_src}sources.png")
 
-split_sources, centers, std_dev = source_fit(table_sources, NB_SOURCE)
-src_masks = mask_source_fit(table_sources, NB_SOURCE)
-plot_split([*split_sources, table_bg], ["IRS 13", "Pulsar Wind Nebula Core", "Sgr A*", "Pulsar Wind Nebula Tail", "Background"], f"2_split_{NB_SOURCE}sources.png")
+split_sources, centers, std_dev, src_masks, src_gmm, src_scaler = source_fit(
+    table_sources, NB_SOURCE, e_lvls=["energy"], fitted_model=src_fitted_model
+)
+plot_split([*split_sources, table_bg],
+    ["IRS 13", "Pulsar Wind Nebula Core", "Sgr A*", "Pulsar Wind Nebula Tail", "Background"],
+    f"{TAG}_2_split_{NB_SOURCE}sources.png")
 
-# Save all as fits events files
 with fits.open(EVT_FILE) as hdul:
     solved_wcs = pywcs.WCS(hdul[0].header)
 
 for i, source in enumerate(src_masks):
     save_with_bgmask_fake(source, bg_mask, f"{TAG}_source_{i}.fits")
-
 save_with_masks_fake(bg_mask, f"{TAG}_source_{i+1}.fits")
+
+if MODE == 'fit':
+    joblib.dump({"gmm": bg_gmm, "scaler": bg_scaler, "bg_second": bg_second}, f"{MODELS_DIR}/bg_model.joblib")
+    joblib.dump({"gmm": src_gmm, "scaler": src_scaler}, f"{MODELS_DIR}/src_model.joblib")
+
+    component_metadata = []
+    for idx, (center, std) in enumerate(zip(centers, std_dev)):
+        component_metadata.append({
+            "component": idx, "x": float(center[0]), "y": float(center[1]),
+            "std_x": float(std[0]), "std_y": float(std[1]), "theta_deg": float(std[2]),
+        })
+    with open(f"{MODELS_DIR}/global_components.json", "w") as fh:
+        json.dump(component_metadata, fh, indent=2)
+    print(f"Saved global models to {MODELS_DIR}/. bg_second={bg_second}")
+else:
+    qa = {"obsid": TAG, "n_events_in_box": len(subset),
+          "n_background": int(bg_mask.sum()), "n_source": int((~bg_mask).sum())}
+    with open(f"{OUTDIR}/{TAG}_qa.json", "w") as fh:
+        json.dump(qa, fh, indent=2)
