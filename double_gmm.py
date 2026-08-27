@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import json
+import sys
 import joblib
 
 from astropy.io import fits
@@ -37,8 +38,8 @@ parser.add_argument('--xmin', type=float, required=True)
 parser.add_argument('--xmax', type=float, required=True)
 parser.add_argument('--ymin', type=float, required=True)
 parser.add_argument('--ymax', type=float, required=True)
-parser.add_argument('--emin', type=float, default=500)   # adjust to your existing EMIN default
-parser.add_argument('--emax', type=float, default=7000)  # adjust to your existing EMAX default
+parser.add_argument('--emin', type=float, default=1500)   # adjust to your existing EMIN default
+parser.add_argument('--emax', type=float, default=8000)  # adjust to your existing EMAX default
 parser.add_argument('--outdir', default='output')
 parser.add_argument('--tag', required=True, help='obsid, used as filename prefix')
 parser.add_argument('--mode', choices=['fit', 'classify'], default='fit',
@@ -73,8 +74,8 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 #YMIN = 4050
 #YMAX = 4110
 
-EMIN = 1500
-EMAX = 8000
+# EMIN = 1500
+# EMAX = 8000
 
 VMIN = 0.5
 VMAX = 1e3
@@ -159,7 +160,7 @@ def plot_split(sources, figname, source_names=None):
     plt.tight_layout()
     plt.savefig(f"output/{figname}")
 
-def starlet_cube(subset, lvl_start=LVL_START, num_lvl=NUM_LVL, include_raw=True):
+def starlet_cube(subset, lvl_start=LVL_START, num_lvl=NUM_LVL, include_raw=True, fitted_model=None):
     """
     Builds a spectral cube and applies starlet transformations. 
     Modifies subset to include the starlet level information and 
@@ -187,6 +188,14 @@ def starlet_cube(subset, lvl_start=LVL_START, num_lvl=NUM_LVL, include_raw=True)
     # TODO: check this works for include_raw=False
 
     spectral_cube, edges = np.histogramdd(subset[['energy', 'x', 'y']].values, bins=(BINE, BINX, BINY))
+
+    total_counts = spectral_cube.sum()
+    if fitted_model:
+        spectral_cube = 2 * np.sqrt(spectral_cube + 3/8) # anscombe transform for sparse data
+
+    if total_counts > 0:
+        spectral_cube = spectral_cube / total_counts
+
     starlet_cube = pys.Starlet_Forward3D(spectral_cube,J=4)[:,:,:,lvl_start:lvl_start+num_lvl]
 
     if include_raw:
@@ -306,7 +315,7 @@ def bg_fit(ncomp=2, e_lvls = ['energy', 'starlet_0', 'starlet_1'], fitted_model=
     table_sources['weight'] = probs[labels == 1, 1]
 
     print("Background table should be larger than sources table.")
-    plot_split([table_bg, table_sources], ["Background", "Foreground"], f"{TAG}_1_bg_sources_split.png")
+    plot_split([table_bg, table_sources], f"{TAG}_1_bg_sources_split.png", ["Background", "Foreground"])
     
     # TODO: better way of determining bg/sources that doesn't rely on size
     # ... image variation loss? but then we have to convert to images first...
@@ -502,8 +511,6 @@ def save_with_masks_fake(mask, out):
             new_hdul.append(hdul[i])
         new_hdul.writeto(f"{OUTDIR}/{out}", overwrite=True)
 
-cube, e_lvls = starlet_cube(subset)
-
 bg_fitted_model = None
 src_fitted_model = None
 forced_bg_second = None
@@ -514,24 +521,45 @@ if MODE == 'classify':
     src_fitted_model = {"gmm": src_saved["gmm"], "scaler": src_saved["scaler"]}
     forced_bg_second = bg_saved["bg_second"]
 
+cube, e_lvls = starlet_cube(subset, fitted_model=bg_fitted_model)
+
+print("starlet_0 range:", subset['starlet_0'].min(), subset['starlet_0'].max())
+print("starlet_1 range:", subset['starlet_1'].min(), subset['starlet_1'].max())
+print("n events:", len(subset))
+
+MIN_SOURCE_EVENTS = 20  # same as for specextract's count check (not absolute, can be tuned)
+
 table_bg, table_sources, bg_mask, bg_gmm, bg_scaler, bg_second = bg_fit(
     e_lvls=['energy', 'starlet_0', 'starlet_1'],
     fitted_model=bg_fitted_model,
     forced_bg_second=forced_bg_second,
 )
 
-# Diagnostic-only plot (never saved as event files) — leave this fitting fresh
-# every time regardless of mode, it doesn't feed into anything downstream.
-bg_nb_src = 4
-bg_split_srcs, ctrs, stddv, _, _, _ = source_fit(table_bg, bg_nb_src, e_lvls=['energy', 'starlet_0', 'starlet_1'])
-plot_split([*bg_split_srcs, table_bg], f"{TAG}_2_bg_starlet_split_{bg_nb_src}sources.png")
+if len(table_sources) < MIN_SOURCE_EVENTS:
+    print(f"[SKIP] {TAG}: only {len(table_sources)} events classified as source "
+          f"(< {MIN_SOURCE_EVENTS}) — nothing usable to split further.")
+    os.makedirs(OUTDIR, exist_ok=True)
+    with open(f"{OUTDIR}/{TAG}_qa.json", "w") as fh:
+        json.dump({"obsid": TAG, "n_events_in_box": len(subset),
+                   "n_background": int(bg_mask.sum()),
+                   "n_source": int(len(table_sources)),
+                   "skipped": True, "reason": "insufficient source events"}, fh, indent=2)
+    sys.exit(0)  # clean exit — not an error, just nothing to extract here
+
+
+if len(table_bg) >= MIN_SOURCE_EVENTS:
+    bg_nb_src = 4
+    bg_split_srcs, ctrs, stddv, _, _, _ = source_fit(table_bg, bg_nb_src, e_lvls=['energy', 'starlet_0', 'starlet_1'])
+    plot_split([*bg_split_srcs, table_bg], f"{TAG}_2_bg_starlet_split_{bg_nb_src}sources.png")
+else:
+    print(f"[{TAG}] skipping bg-starlet diagnostic plot: table_bg has only {len(table_bg)} events")
 
 split_sources, centers, std_dev, src_masks, src_gmm, src_scaler = source_fit(
     table_sources, NB_SOURCE, e_lvls=["energy"], fitted_model=src_fitted_model
 )
 plot_split([*split_sources, table_bg],
-    ["IRS 13", "Pulsar Wind Nebula Core", "Sgr A*", "Pulsar Wind Nebula Tail", "Background"],
-    f"{TAG}_2_split_{NB_SOURCE}sources.png")
+    f"{TAG}_2_split_{NB_SOURCE}sources.png", 
+    ["IRS 13", "Pulsar Wind Nebula Core", "Sgr A*", "Pulsar Wind Nebula Tail", "Background"])
 
 with fits.open(EVT_FILE) as hdul:
     solved_wcs = pywcs.WCS(hdul[0].header)
