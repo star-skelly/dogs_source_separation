@@ -15,16 +15,9 @@ for f in reproj_files:
     outdir = f"output/{obsid}"
     os.makedirs(outdir, exist_ok=True)
 
-    cmd = [
-        "python", "../double_gmm.py",
-        "--evt-file", f,
-        "--repro-file", f,
-        "--xmin", str(XMIN), "--xmax", str(XMAX),
-        "--ymin", str(YMIN), "--ymax", str(YMAX),
-        "--outdir", outdir,
-        "--tag", obsid,
-        "--mode", "classify",
-        "--models-dir", "../models"
-    ]
+    cmd = ["python", "../transfer_labels.py",
+       "--evt-file", f, "--labels", "../models/merged_labels.parquet",
+       "--xmin", str(XMIN), "--xmax", str(XMAX), "--ymin", str(YMIN), "--ymax", str(YMAX),
+       "--outdir", outdir, "--tag", obsid]
     print("Running:", " ".join(cmd))
     subprocess.run(cmd, check=True)

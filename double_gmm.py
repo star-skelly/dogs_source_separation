@@ -96,8 +96,8 @@ os.makedirs(OUTDIR, exist_ok=True)
 hdu = fits.open(EVT_FILE)
 evt_data = hdu[1].data
 
-cols = ['energy', 'x', 'y', 'ccd_id']
-df = Table([evt_data[c] for c in cols], names=cols, dtype=[np.float64, np.float64, np.float64, np.float64]).to_pandas()
+cols = ['time', 'energy', 'x', 'y', 'ccd_id']
+df = Table([evt_data[c] for c in cols], names=cols, dtype=[np.float64, np.float64, np.float64, np.float64, np.float64]).to_pandas()
 
 subset = df[(df['x'] > XMIN) & (df['x'] < XMAX) & \
             (df['y'] > YMIN) & (df['y'] < YMAX) & \
@@ -571,6 +571,15 @@ save_with_masks_fake(bg_mask, f"{TAG}_source_{i+1}.fits")
 if MODE == 'fit':
     joblib.dump({"gmm": bg_gmm, "scaler": bg_scaler, "bg_second": bg_second}, f"{MODELS_DIR}/bg_model.joblib")
     joblib.dump({"gmm": src_gmm, "scaler": src_scaler}, f"{MODELS_DIR}/src_model.joblib")
+    lab = subset[['time', 'x', 'y', 'energy', 'ccd_id']].copy()
+    lab['is_bg'] = bg_mask
+    lab['src_label'] = -1
+    lab['weight'] = np.nan
+    lab.loc[table_bg.index, 'weight'] = table_bg['weight']
+    for i, s in enumerate(split_sources):
+        lab.loc[s.index, 'src_label'] = i
+        lab.loc[s.index, 'weight'] = s['weight']
+    lab.to_parquet(f"{MODELS_DIR}/merged_labels.parquet")
 
     component_metadata = []
     for idx, (center, std) in enumerate(zip(centers, std_dev)):
