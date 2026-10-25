@@ -1,4 +1,5 @@
 import glob, os, subprocess
+import re
 from astropy.io import fits
 
 EMIN = 1500
@@ -44,6 +45,8 @@ failures = []
 skipped = []
 
 for evtfile in sorted(glob.glob("output/*/*_source_*.fits")):
+    if not re.search(r"/\d+_source_\d+\.fits$", evtfile):
+        continue
     outroot = os.path.splitext(evtfile)[0]
     obsid = evtfile.split("/")[1]
 

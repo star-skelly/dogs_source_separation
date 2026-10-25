@@ -15,7 +15,7 @@ for f in reproj_files:
     outdir = f"output/{obsid}"
     os.makedirs(outdir, exist_ok=True)
 
-    cmd = ["python", "../transfer_labels.py",
+    cmd = ["python", "transfer_labels.py",
        "--evt-file", f, "--labels", "../models/merged_labels.parquet",
        "--xmin", str(XMIN), "--xmax", str(XMAX), "--ymin", str(YMIN), "--ymax", str(YMAX),
        "--outdir", outdir, "--tag", obsid]
